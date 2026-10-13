@@ -1,8 +1,9 @@
 package com.catch7ng.ostatus
 
 import android.Manifest
-import android.app.NotificationManager
 import android.animation.ValueAnimator
+import android.app.AlertDialog
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -18,7 +19,6 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import rikka.shizuku.Shizuku
 
 class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
@@ -26,7 +26,6 @@ class MainActivity : AppCompatActivity() {
     private var overlayValue: TextView? = null
     private var phoneValue: TextView? = null
     private var dndValue: TextView? = null
-    private var shizukuValue: TextView? = null
     private var colorValue: TextView? = null
 
     private val dark get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
@@ -38,6 +37,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        migrateLegacyColourMode()
         window.statusBarColor = pageColor
         window.navigationBarColor = pageColor
         if (!dark) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
@@ -50,10 +50,14 @@ class MainActivity : AppCompatActivity() {
         ensureOverlayStartedIfEnabled()
     }
 
+    private fun migrateLegacyColourMode() {
+        val current = prefs.getString("color_mode", null)
+        if (current == null || current == "auto") {
+            prefs.edit().putString("color_mode", "white").apply()
+        }
+    }
+
     private fun ensureOverlayStartedIfEnabled() {
-        // The main switch defaults to ON. If the user returns after granting
-        // overlay permission, start the service immediately instead of
-        // requiring an OFF -> ON toggle.
         if (!prefs.getBoolean("duo_enabled", true)) return
         if (!Settings.canDrawOverlays(this)) return
         BootPrefs.setEnabled(this, true)
@@ -79,6 +83,7 @@ class MainActivity : AppCompatActivity() {
             typeface = Typeface.create("sans-serif", Typeface.BOLD)
             setPadding(dp(2), 0, 0, dp(4))
         })
+
         sectionTitle(content, "O STATUS BAR")
         val mainCard = card()
         val onRow = row("O Status Bar")
@@ -107,18 +112,17 @@ class MainActivity : AppCompatActivity() {
         val colorRow = row("Indicator Colour")
         colorValue = colourChoiceLabel(colorName())
         colorRow.addView(colorValue)
-        colorRow.setOnClickListener { cycleIndicatorColour() }
+        colorRow.setOnClickListener { showIndicatorColourMenu() }
         appearance.addView(colorRow)
         appearance.addView(separatorView())
+
         val batteryPercentageRow = row("Battery Percentage")
         val batteryPercentageSwitch = OStatusSwitch(this).apply {
             isOn = prefs.getBoolean("battery_percentage", false)
             onToggleRequested = { requested ->
                 prefs.edit().putBoolean("battery_percentage", requested).apply()
                 BootPrefs.setBatteryPercentage(this@MainActivity, requested)
-                if (prefs.getBoolean("duo_enabled", true) && Settings.canDrawOverlays(this@MainActivity)) {
-                    ContextCompat.startForegroundService(this@MainActivity, Intent(this@MainActivity, StatusBarService::class.java))
-                }
+                refreshOverlay()
                 true
             }
         }
@@ -126,6 +130,7 @@ class MainActivity : AppCompatActivity() {
         batteryPercentageRow.setOnClickListener { batteryPercentageSwitch.requestToggle() }
         appearance.addView(batteryPercentageRow)
         appearance.addView(separatorView())
+
         val positionRow = row("Position & Size")
         positionRow.addView(ForwardChevronView(this), LinearLayout.LayoutParams(dp(18), dp(32)))
         positionRow.setOnClickListener { startActivity(Intent(this, PositionSizeActivity::class.java)) }
@@ -134,17 +139,25 @@ class MainActivity : AppCompatActivity() {
 
         sectionTitle(content, "PERMISSIONS")
         val permissions = card()
-        val overlayRow = permissionRow("Display Over Apps") { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }
-        overlayValue = overlayRow.second; permissions.addView(overlayRow.first)
+        val overlayRow = permissionRow("Display Over Apps") {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        }
+        overlayValue = overlayRow.second
+        permissions.addView(overlayRow.first)
         permissions.addView(separatorView())
-        val phoneRow = permissionRow("Phone Status") { ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_PHONE_STATE), 10) }
-        phoneValue = phoneRow.second; permissions.addView(phoneRow.first)
+
+        val phoneRow = permissionRow("Phone Status") {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_PHONE_STATE), 10)
+        }
+        phoneValue = phoneRow.second
+        permissions.addView(phoneRow.first)
         permissions.addView(separatorView())
-        val dndRow = permissionRow("Do Not Disturb Access") { startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) }
-        dndValue = dndRow.second; permissions.addView(dndRow.first)
-        permissions.addView(separatorView())
-        val shizukuRow = permissionRow("Shizuku") { handleShizukuClick() }
-        shizukuValue = shizukuRow.second; permissions.addView(shizukuRow.first)
+
+        val dndRow = permissionRow("Do Not Disturb Access") {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+        }
+        dndValue = dndRow.second
+        permissions.addView(dndRow.first)
         content.addView(permissions)
 
         sectionTitle(content, "OPTIONS")
@@ -181,10 +194,6 @@ class MainActivity : AppCompatActivity() {
         footerMain.addView(footerText("  ·  "))
         footerMain.addView(footerText("© 2026 CATCH7NG.L"))
         footer.addView(footerMain)
-        footer.addView(footerText("Dynamic Auto requires Shizuku, a third-party app, to enable status bar colour detection.").apply {
-            textSize = 10.5f
-            setPadding(0, dp(4), 0, 0)
-        })
         content.addView(footer)
 
         scroll.addView(content)
@@ -198,47 +207,62 @@ class MainActivity : AppCompatActivity() {
         refreshPermissionStates()
     }
 
-    private fun cycleIndicatorColour() {
-        val current = prefs.getString("color_mode", "auto") ?: "auto"
-        val next = when (current) {
-            "auto" -> "black"
-            "black" -> "white"
-            else -> "auto"
+    private fun showIndicatorColourMenu() {
+        val labels = arrayOf("White", "Black", "Custom")
+        val current = prefs.getString("color_mode", "white") ?: "white"
+        val checked = when (current) {
+            "black" -> 1
+            "custom" -> 2
+            else -> 0
         }
-        prefs.edit().putString("color_mode", next).apply()
-        colorValue?.text = when (next) {
-            "black" -> "Black"
-            "white" -> "White"
-            else -> "Auto"
-        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Indicator Colour")
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                when (which) {
+                    0 -> {
+                        prefs.edit().putString("color_mode", "white").apply()
+                        colorValue?.text = "White"
+                        dialog.dismiss()
+                        refreshOverlay()
+                    }
+                    1 -> {
+                        prefs.edit().putString("color_mode", "black").apply()
+                        colorValue?.text = "Black"
+                        dialog.dismiss()
+                        refreshOverlay()
+                    }
+                    2 -> {
+                        dialog.dismiss()
+                        val initial = prefs.getInt("custom_color", Color.WHITE)
+                        IndicatorColorPickerDialog.show(this, initial) { color ->
+                            prefs.edit()
+                                .putString("color_mode", "custom")
+                                .putInt("custom_color", color)
+                                .apply()
+                            colorValue?.text = "Custom"
+                            refreshOverlay()
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun refreshOverlay() {
         if (prefs.getBoolean("duo_enabled", true) && Settings.canDrawOverlays(this)) {
-            // Ask the existing service to refresh its colour lifecycle in-place.
-            // Avoid stop/start races when switching Black/White back to Auto.
             ContextCompat.startForegroundService(this, Intent(this, StatusBarService::class.java))
         }
     }
 
     private fun refreshPermissionStates() {
         overlayValue?.let { setPermission(it, Settings.canDrawOverlays(this)) }
-        phoneValue?.let { setPermission(it, ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) }
-        dndValue?.let { setPermission(it, getSystemService(NotificationManager::class.java).isNotificationPolicyAccessGranted) }
-        shizukuValue?.let {
-            it.text = ShizukuAppearanceManager.status(this)
-            it.setTextColor(if (ShizukuAppearanceManager.isAuthorized()) secondary else primary)
+        phoneValue?.let {
+            setPermission(it, ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED)
         }
-    }
-
-    private fun handleShizukuClick() {
-        when {
-            !ShizukuAppearanceManager.isInstalled(this) -> {
-                val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=moe.shizuku.privileged.api"))
-                try { startActivity(market) } catch (_: Exception) {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api")))
-                }
-            }
-            !ShizukuAppearanceManager.isRunning() -> packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")?.let(::startActivity)
-            !ShizukuAppearanceManager.isAuthorized() -> Shizuku.requestPermission(1001)
-            else -> packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")?.let(::startActivity)
+        dndValue?.let {
+            setPermission(it, getSystemService(NotificationManager::class.java).isNotificationPolicyAccessGranted)
         }
     }
 
@@ -297,7 +321,6 @@ class MainActivity : AppCompatActivity() {
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
 
-            // Monochrome O.status switch: neutral OFF, black/white ON depending theme.
             val offTrack = if (dark) Color.rgb(58,58,60) else Color.rgb(229,229,234)
             val onTrack = if (dark) Color.WHITE else Color.BLACK
             paint.color = blend(offTrack, onTrack, progress)
@@ -327,31 +350,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun displayVersion(): String {
-        val raw = packageManager.getPackageInfo(packageName, 0).versionName ?: "2.0.0"
-        return raw
+        return packageManager.getPackageInfo(packageName, 0).versionName ?: "2.0.0"
     }
 
-    private fun colorName() = when (prefs.getString("color_mode", "auto")) { "black" -> "Black"; "white" -> "White"; else -> "Auto" }
+    private fun colorName() = when (prefs.getString("color_mode", "white")) {
+        "black" -> "Black"
+        "custom" -> "Custom"
+        else -> "White"
+    }
 
     private fun sectionTitle(parent: LinearLayout, title: String) {
         parent.addView(TextView(this).apply {
-            text = title; textSize = 12f; setTextColor(secondary)
+            text = title
+            textSize = 12f
+            setTextColor(secondary)
             setPadding(dp(16), dp(18), 0, dp(6))
         })
     }
 
     private fun card(radius: Float = 14f) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        background = GradientDrawable().apply { setColor(cardColor); cornerRadius = dp(radius.toInt()).toFloat() }
+        background = GradientDrawable().apply {
+            setColor(cardColor)
+            cornerRadius = dp(radius.toInt()).toFloat()
+        }
         clipToOutline = true
     }
 
     private fun row(title: String): LinearLayout {
         return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(9), dp(14), dp(9)); minimumHeight = dp(54)
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(9), dp(14), dp(9))
+            minimumHeight = dp(54)
             addView(TextView(this@MainActivity).apply {
-                text = title; textSize = 16f; setTextColor(primary); gravity = Gravity.CENTER_VERTICAL
+                text = title
+                textSize = 16f
+                setTextColor(primary)
+                gravity = Gravity.CENTER_VERTICAL
             }, LinearLayout.LayoutParams(0, -1, 1f))
         }
     }
@@ -359,12 +395,16 @@ class MainActivity : AppCompatActivity() {
     private fun permissionRow(title: String, click: () -> Unit): Pair<LinearLayout, TextView> {
         val r = row(title)
         val v = valueLabel("")
-        r.addView(v); r.setOnClickListener { click() }
+        r.addView(v)
+        r.setOnClickListener { click() }
         return Pair(r, v)
     }
 
     private fun valueLabel(value: String) = TextView(this).apply {
-        text = value; textSize = 15f; setTextColor(secondary); gravity = Gravity.CENTER_VERTICAL
+        text = value
+        textSize = 15f
+        setTextColor(secondary)
+        gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(10), 0, 0, 0)
     }
 
@@ -390,6 +430,7 @@ class MainActivity : AppCompatActivity() {
     private fun dp(v: Int) = (v * d + 0.5f).toInt()
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults); refreshPermissionStates()
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        refreshPermissionStates()
     }
 }
