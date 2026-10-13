@@ -18,10 +18,7 @@ class StatusBarService : Service() {
     private var isLeftSide = false
     private var autoHideInFullScreen = true
     private var hiddenForFullScreen = false
-    private var shizukuAppearanceManager: ShizukuAppearanceManager? = null
 
-    // Burn-in protection: move the overlay by a tiny, temporary offset over time.
-    // User-saved Position & Size values are never modified.
     private val pixelShiftHandler = Handler(Looper.getMainLooper())
     private val pixelShiftPattern = arrayOf(
         0 to 0, 1 to 0, 1 to 1, 0 to 1,
@@ -58,15 +55,12 @@ class StatusBarService : Service() {
         val (screenW, screenH) = displaySizePx()
         val overlayW = lp.width.coerceAtLeast(1)
         val overlayH = lp.height.coerceAtLeast(1)
-
-        // x in START/END gravity is an inward margin. Keep the complete overlay visible.
         val maxX = (screenW - overlayW).coerceAtLeast(0)
         val requestedX = ((getSharedPreferences("settings", MODE_PRIVATE)
             .getInt("margin5", 7) + getSharedPreferences("settings", MODE_PRIVATE)
             .getInt("duo_h_offset", 0)) * density).toInt()
         baseMarginPx = requestedX.coerceIn(0, maxX)
 
-        // y uses TOP gravity. Preserve the legacy +7 baseline, but never allow clipping.
         val pref = getSharedPreferences("settings", MODE_PRIVATE)
         val requestedY = ((pref.getInt("y5", 0) + 7 + pref.getInt("duo_v_offset_v2", 0)) * density).toInt()
         baseYPx = requestedY.coerceIn(0, (screenH - overlayH).coerceAtLeast(0))
@@ -101,7 +95,6 @@ class StatusBarService : Service() {
 
     private fun updateAvoidance() {
         if (!::wm.isInitialized || !::v.isInitialized || !::lp.isInitialized) return
-        // Left position never uses DND avoidance, so do not even read DND state.
         if (isLeftSide) {
             lastDndOn = false
             applyTemporaryPosition()
@@ -126,9 +119,6 @@ class StatusBarService : Service() {
         val (screenW, screenH) = displaySizePx()
         val maxX = (screenW - lp.width).coerceAtLeast(0)
         val maxY = (screenH - lp.height).coerceAtLeast(0)
-
-        // Right-side DND avoidance remains exactly as before. Pixel shifting is layered
-        // on top and clamped so the overlay can never move outside the current display.
         val avoidancePx = if (lastDndOn == true && !isLeftSide) dndShiftPx else 0
         val targetX = (baseMarginPx + avoidancePx + pixelShiftXPx).coerceIn(0, maxX)
         val targetY = (baseYPx + pixelShiftYPx).coerceIn(0, maxY)
@@ -147,7 +137,6 @@ class StatusBarService : Service() {
         applyTemporaryPosition()
         pixelShiftHandler.postDelayed(pixelShiftRunnable, 60_000L)
     }
-
 
     private fun updateFullScreenVisibility() {
         if (!::v.isInitialized || !v.isAttachedToWindow) return
@@ -170,11 +159,8 @@ class StatusBarService : Service() {
         val shouldHide = !statusBarVisible
         if (shouldHide != hiddenForFullScreen) {
             hiddenForFullScreen = shouldHide
-            if (shouldHide) {
-                // Do not make the overlay root invisible: once invisible, its own
-                // WindowInsets can stop updating and we may never observe fullscreen exit.
-                v.alpha = 0f
-            } else {
+            if (shouldHide) v.alpha = 0f
+            else {
                 v.alpha = 1f
                 applyTemporaryPosition()
             }
@@ -185,18 +171,13 @@ class StatusBarService : Service() {
         hiddenForFullScreen = false
         if (!::v.isInitialized) return
         v.alpha = 1f
-
-        // Event-driven fullscreen detection. The overlay remains attached (alpha only),
-        // so it can continue receiving WindowInsets changes when the system status bar
-        // is hidden or restored. No periodic fullscreen polling is required.
-        v.setOnApplyWindowInsetsListener { view, insets ->
+        v.setOnApplyWindowInsetsListener { _, insets ->
             updateFullScreenVisibility()
             insets
         }
         v.requestApplyInsets()
         v.post { updateFullScreenVisibility() }
     }
-
 
     private val batteryRx = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
@@ -212,32 +193,15 @@ class StatusBarService : Service() {
 
     private fun resolvedColorMode(): String {
         val pref = getSharedPreferences("settings", MODE_PRIVATE)
-        val mode = pref.getString("color_mode", null)
-        return when {
-            mode != null -> mode
-            pref.contains("black5") -> if (pref.getBoolean("black5", false)) "black" else "white"
-            else -> "auto"
+        return when (val mode = pref.getString("color_mode", null)) {
+            "black", "white", "custom" -> mode
+            else -> if (pref.getBoolean("black5", false)) "black" else "white"
         }
     }
 
     private fun refreshColorMode() {
         if (!::v.isInitialized) return
-        val resolvedMode = resolvedColorMode()
-        v.setColorMode(resolvedMode)
-
-        if (resolvedMode == "auto") {
-            if (shizukuAppearanceManager == null) {
-                shizukuAppearanceManager = ShizukuAppearanceManager(this) { black ->
-                    Handler(Looper.getMainLooper()).post {
-                        if (::v.isInitialized) v.setShizukuAutoBlack(black)
-                    }
-                }.also { it.start() }
-            }
-        } else {
-            shizukuAppearanceManager?.stop()
-            shizukuAppearanceManager = null
-            v.setShizukuAutoBlack(null)
-        }
+        v.setColorMode(resolvedColorMode())
     }
 
     private fun registerDndReceiverIfNeeded() {
@@ -269,7 +233,7 @@ class StatusBarService : Service() {
             } else {
                 registerDndReceiverIfNeeded()
                 lastDndOn = null
-                updateAvoidance() // one immediate read when entering Right
+                updateAvoidance()
             }
         }
 
@@ -317,9 +281,6 @@ class StatusBarService : Service() {
         wm.addView(v,lp)
         overlayAttached = true
         registerReceiver(batteryRx,IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        // DND avoidance only applies on the right. Right side is event-driven: read
-        // current state once, then wait for Android's interruption-filter broadcast.
-        // Left side performs no DND read and registers no DND receiver at all.
         if (!isLeftSide) {
             registerDndReceiverIfNeeded()
             updateAvoidance()
@@ -344,26 +305,21 @@ class StatusBarService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Removing the settings Activity from Recents is not the same as turning
-        // O Status Bar off. Most Android builds keep this foreground service alive.
-        // Some OEMs tear the process down with the task, so arm one short, one-shot
-        // recovery check. Force Stop / Android's Active apps Stop still wins because
-        // the OS cancels pending work for a force-stopped package.
         if (BootPrefs.isEnabled(this) && Settings.canDrawOverlays(this)) {
             TaskRecoveryReceiver.schedule(this)
         }
         super.onTaskRemoved(rootIntent)
     }
+
     override fun onDestroy() {
         try{unregisterReceiver(batteryRx)}catch(_:Exception){}
         unregisterDndReceiverIfNeeded()
         pixelShiftHandler.removeCallbacks(pixelShiftRunnable)
         if (::v.isInitialized) v.setOnApplyWindowInsetsListener(null)
-        shizukuAppearanceManager?.stop()
-        shizukuAppearanceManager = null
         if(::v.isInitialized)v.stop()
         if(::wm.isInitialized&&::v.isInitialized)try{wm.removeView(v); overlayAttached=false}catch(_:Exception){}
         super.onDestroy()
     }
+
     override fun onBind(i:Intent?):IBinder?=null
 }
