@@ -1,6 +1,7 @@
 package com.catch7ng.ostatus
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.*
@@ -14,6 +15,7 @@ import android.provider.Settings
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 import androidx.core.content.ContextCompat
 import kotlin.math.min
 
@@ -32,6 +34,8 @@ class DuoIndicatorView(
     private var mobileDataConnected = false
     private var airplaneMode = false
     private val simLevels = intArrayOf(0, 0)
+    private val animatedSimLevels = floatArrayOf(0f, 0f)
+    private val signalAnimators = arrayOfNulls<ValueAnimator>(2)
     private var cellularNetworkLabel = ""
     private var trackedDataSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
     private var networkDisplayTracker: NetworkDisplayTracker? = null
@@ -76,6 +80,7 @@ class DuoIndicatorView(
         networkDisplayTracker?.stop()
         networkDisplayTracker = null
         trackedDataSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
+        signalAnimators.forEach { it?.cancel() }
     }
 
     private fun resolvedActiveColor(): Int = when (colorMode) {
@@ -110,14 +115,32 @@ class DuoIndicatorView(
         } else wifiLevel = 0
     }
 
-    private fun resetSimState() { simLevels[0] = 0; simLevels[1] = 0 }
+    private fun animateSimLevel(slot: Int, target: Int) {
+        val bounded = target.coerceIn(0, 4)
+        if (slot !in 0..1) return
+        if (simLevels[slot] == bounded && signalAnimators[slot]?.isRunning != true) return
+        simLevels[slot] = bounded
+        signalAnimators[slot]?.cancel()
+        signalAnimators[slot] = ValueAnimator.ofFloat(animatedSimLevels[slot], bounded.toFloat()).apply {
+            duration = 380L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                animatedSimLevels[slot] = it.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
 
     private fun refreshCellular() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-            resetSimState(); cellularNetworkLabel = ""; return
+            animateSimLevel(0, 0)
+            animateSimLevel(1, 0)
+            cellularNetworkLabel = ""
+            return
         }
         try {
-            resetSimState()
+            val newLevels = intArrayOf(0, 0)
             val base = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
             val subscriptions = context.getSystemService(SubscriptionManager::class.java)
             val active = subscriptions.activeSubscriptionInfoList?.sortedBy { it.simSlotIndex }.orEmpty()
@@ -126,8 +149,10 @@ class DuoIndicatorView(
                 if (slot !in 0..1) return@forEach
                 val tm = base.createForSubscriptionId(info.subscriptionId)
                 @Suppress("DEPRECATION") val level = tm.signalStrength?.level?.coerceIn(0, 4) ?: 0
-                simLevels[slot] = level
+                newLevels[slot] = level
             }
+            animateSimLevel(0, newLevels[0])
+            animateSimLevel(1, newLevels[1])
 
             val defaultDataSubId = SubscriptionManager.getDefaultDataSubscriptionId()
             val dataTm = if (SubscriptionManager.isValidSubscriptionId(defaultDataSubId)) base.createForSubscriptionId(defaultDataSubId) else base
@@ -142,7 +167,9 @@ class DuoIndicatorView(
             cellularNetworkLabel = NetworkDisplayTracker.label(networkDisplayTracker?.displayInfo, fallbackType)
                 .let { if (it == "4G" || it == "5G") it else "" }
         } catch (_: Exception) {
-            resetSimState(); cellularNetworkLabel = ""
+            animateSimLevel(0, 0)
+            animateSimLevel(1, 0)
+            cellularNetworkLabel = ""
         }
     }
 
@@ -152,7 +179,7 @@ class DuoIndicatorView(
         if (side <= 0f) return
 
         val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-        val thicknessScale = prefs.getInt("ring_thickness_pct", 100).coerceIn(40, 160) / 100f
+        val thicknessScale = prefs.getInt("ring_thickness_pct", 100).coerceIn(40, 180) / 100f
         val statusGapScale = prefs.getInt("status_gap_pct", 100).coerceIn(60, 180) / 100f
         val showNetworkLabel = prefs.getBoolean("show_network_label", true)
 
@@ -160,18 +187,17 @@ class DuoIndicatorView(
         val cy = height / 2f
         val active = resolvedActiveColor()
         val inactive = withAlpha(active, 58)
-        val radius = side * 0.292f
-        val stroke = side * 0.046f * thicknessScale
+        val radius = side * 0.285f
+        val stroke = side * 0.052f * thicknessScale
         val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
 
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = stroke
         paint.strokeCap = Paint.Cap.ROUND
 
-        // Compact side arcs: SIM 2 on the left, SIM 1 on the right.
-        // The shorter sweeps leave clear breathing room at top/bottom for status text.
-        drawSegmentedSignalArc(canvas, rect, 136f, 17f, 5f, if (airplaneMode) 0 else simLevels[1], active, inactive)
-        drawSegmentedSignalArc(canvas, rect, 316f, 17f, 5f, if (airplaneMode) 0 else simLevels[0], active, inactive)
+        // Keep the original arc presence, but animate each segment's fill softly when signal changes.
+        drawSegmentedSignalArc(canvas, rect, 108f, 29f, 6f, if (airplaneMode) 0f else animatedSimLevels[1], active, inactive)
+        drawSegmentedSignalArc(canvas, rect, 288f, 29f, 6f, if (airplaneMode) 0f else animatedSimLevels[0], active, inactive)
 
         drawBattery(canvas, cx, cy, radius, side, active, statusGapScale)
         drawConnectivity(canvas, cx, cy, radius, side, active, inactive, statusGapScale, showNetworkLabel)
@@ -179,17 +205,18 @@ class DuoIndicatorView(
 
     private fun drawSegmentedSignalArc(
         canvas: Canvas, rect: RectF, start: Float, segmentSweep: Float, segmentGap: Float,
-        level: Int, active: Int, inactive: Int
+        level: Float, active: Int, inactive: Int
     ) {
-        val lit = level.coerceIn(0, 4)
         repeat(4) { index ->
-            paint.color = if (index < lit) active else inactive
+            val fill = (level - index).coerceIn(0f, 1f)
+            val inactiveAlpha = Color.alpha(inactive)
+            val alpha = (inactiveAlpha + (255 - inactiveAlpha) * fill).toInt()
+            paint.color = withAlpha(active, alpha)
             canvas.drawArc(rect, start + index * (segmentSweep + segmentGap), segmentSweep, false, paint)
         }
     }
 
     private fun drawBattery(canvas: Canvas, cx: Float, cy: Float, radius: Float, side: Float, active: Int, gapScale: Float) {
-        // The switch is literal: when percentage is off, the battery text disappears completely.
         if (!batteryPercentageEnabled) return
 
         val batteryColor = when {
@@ -222,8 +249,6 @@ class DuoIndicatorView(
 
         val hasNetworkLabel = showNetworkLabel && cellularNetworkLabel.isNotEmpty()
 
-        // Wi-Fi and cellular generation are independent indicators now.
-        // When both exist, place them side-by-side instead of letting Wi-Fi hide 4G/5G.
         when {
             wifiConnected && hasNetworkLabel -> {
                 drawWifi(canvas, cx - side * 0.10f, baseY, side, active, inactive)
@@ -235,11 +260,13 @@ class DuoIndicatorView(
     }
 
     private fun drawNetworkLabel(canvas: Canvas, label: String, cx: Float, cy: Float, side: Float, color: Int) {
+        val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val labelScale = prefs.getInt("network_label_size_pct", 135).coerceIn(70, 220) / 100f
         paint.style = Paint.Style.FILL
         paint.color = color
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         paint.textAlign = Paint.Align.CENTER
-        paint.textSize = side * 0.175f
+        paint.textSize = side * 0.13f * labelScale
         val fm = paint.fontMetrics
         canvas.drawText(label, cx, cy - (fm.ascent + fm.descent) / 2f, paint)
     }
