@@ -28,11 +28,6 @@ class StatusBarService : Service() {
         }
     }
 
-    /**
-     * Camera-ring positioning is intentionally screen-centred.
-     * X is now a signed calibration offset from the physical screen centre,
-     * instead of the old O.status START/END edge margin.
-     */
     private fun clampUserPosition(density: Float) {
         val (screenW, screenH) = displaySizePx()
         val overlayW = lp.width.coerceAtLeast(1)
@@ -43,8 +38,12 @@ class StatusBarService : Service() {
         val requestedX = (pref.getInt("duo_h_offset", 0) * density).toInt()
         baseXPx = requestedX.coerceIn(-maxCenterOffsetX, maxCenterOffsetX)
 
+        // FLAG_LAYOUT_NO_LIMITS lets the ring intentionally sit partly above y=0.
+        // Previously the lower clamp was 0, which made negative slider values stop having any effect.
         val requestedY = ((pref.getInt("y5", 0) + 7 + pref.getInt("duo_v_offset_v2", 0)) * density).toInt()
-        baseYPx = requestedY.coerceIn(0, (screenH - overlayH).coerceAtLeast(0))
+        val minY = -overlayH
+        val maxY = (screenH - overlayH).coerceAtLeast(0)
+        baseYPx = requestedY.coerceIn(minY, maxY)
 
         lp.x = baseXPx
         lp.y = baseYPx
