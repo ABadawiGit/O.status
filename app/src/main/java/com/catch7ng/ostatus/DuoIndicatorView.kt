@@ -32,12 +32,8 @@ class DuoIndicatorView(
     private var mobileDataConnected = false
     private var airplaneMode = false
 
-    // Slot order is deliberate: [0] = SIM 1, [1] = SIM 2.
+    // [0] = SIM 1, [1] = SIM 2.
     private val simLevels = intArrayOf(0, 0)
-    private val simSubIds = intArrayOf(
-        SubscriptionManager.INVALID_SUBSCRIPTION_ID,
-        SubscriptionManager.INVALID_SUBSCRIPTION_ID
-    )
 
     private var cellularNetworkLabel = ""
     private var trackedDataSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
@@ -52,11 +48,12 @@ class DuoIndicatorView(
     }
 
     fun setColorMode(value: String) {
-        if (colorMode == value) return
-        colorMode = value
-        customColor = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val latestCustom = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
             .getInt("custom_color", Color.WHITE)
-        invalidate()
+        val changed = colorMode != value || customColor != latestCustom
+        colorMode = value
+        customColor = latestCustom
+        if (changed) invalidate()
     }
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -126,12 +123,14 @@ class DuoIndicatorView(
     private fun resetSimState() {
         simLevels[0] = 0
         simLevels[1] = 0
-        simSubIds[0] = SubscriptionManager.INVALID_SUBSCRIPTION_ID
-        simSubIds[1] = SubscriptionManager.INVALID_SUBSCRIPTION_ID
     }
 
     private fun refreshCellular() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_PHONE_STATE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
             resetSimState()
             cellularNetworkLabel = ""
             return
@@ -148,12 +147,10 @@ class DuoIndicatorView(
             active.take(2).forEach { info ->
                 val slot = info.simSlotIndex
                 if (slot !in 0..1) return@forEach
-
                 val tm = base.createForSubscriptionId(info.subscriptionId)
                 @Suppress("DEPRECATION")
                 val level = tm.signalStrength?.level?.coerceIn(0, 4) ?: 0
                 simLevels[slot] = level
-                simSubIds[slot] = info.subscriptionId
             }
 
             val defaultDataSubId = SubscriptionManager.getDefaultDataSubscriptionId()
@@ -185,36 +182,78 @@ class DuoIndicatorView(
         }
     }
 
-    override fun onDraw(c: Canvas) {
-        super.onDraw(c)
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
 
+        val side = min(width, height).toFloat()
+        if (side <= 0f) return
+
+        val cx = width / 2f
+        val cy = height / 2f
         val active = resolvedActiveColor()
-        val inactive = withAlpha(active, if (colorMode == "custom") 74 else 72)
+        val inactive = withAlpha(active, 64)
 
-        val s = min(width, height) / 436f
-        fun X(v: Float) = width / 2f + (v - 237f) * s
-        fun Y(v: Float) = height / 2f + (v - 211f) * s
-
-        val cx = X(237f)
-        val cy = Y(211f)
-        val r = 154f * s
-        val rect = RectF(cx - r, cy - r, cx + r, cy + r)
-
-        // Camera ring: left half = SIM 2, right half = SIM 1.
-        // A gap at the top is reserved for battery text and a gap at the bottom
-        // is reserved for Wi-Fi / mobile-data / airplane state.
-        val leftStart = 110f
-        val leftSweep = 140f
-        val rightStart = 290f
-        val rightSweep = 140f
+        // Keep the punch-hole itself completely clear. Everything is placed
+        // around a compact ring centred on the screen/camera axis.
+        val radius = side * 0.285f
+        val stroke = side * 0.052f
+        val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
 
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 24f * s
+        paint.strokeWidth = stroke
         paint.strokeCap = Paint.Cap.ROUND
 
-        drawSignalArc(c, rect, leftStart, leftSweep, if (airplaneMode) 0 else simLevels[1], active, inactive)
-        drawSignalArc(c, rect, rightStart, rightSweep, if (airplaneMode) 0 else simLevels[0], active, inactive)
+        // Four clean segments per SIM. Left = SIM 2, right = SIM 1.
+        // Top/bottom breathing room keeps battery and network status separate.
+        drawSegmentedSignalArc(
+            canvas, rect,
+            start = 108f,
+            segmentSweep = 29f,
+            segmentGap = 6f,
+            level = if (airplaneMode) 0 else simLevels[1],
+            active = active,
+            inactive = inactive
+        )
+        drawSegmentedSignalArc(
+            canvas, rect,
+            start = 288f,
+            segmentSweep = 29f,
+            segmentGap = 6f,
+            level = if (airplaneMode) 0 else simLevels[0],
+            active = active,
+            inactive = inactive
+        )
 
+        drawBattery(canvas, cx, cy, radius, side, active)
+        drawConnectivity(canvas, cx, cy, radius, side, active, inactive)
+    }
+
+    private fun drawSegmentedSignalArc(
+        canvas: Canvas,
+        rect: RectF,
+        start: Float,
+        segmentSweep: Float,
+        segmentGap: Float,
+        level: Int,
+        active: Int,
+        inactive: Int
+    ) {
+        val lit = level.coerceIn(0, 4)
+        repeat(4) { index ->
+            val angle = start + index * (segmentSweep + segmentGap)
+            paint.color = if (index < lit) active else inactive
+            canvas.drawArc(rect, angle, segmentSweep, false, paint)
+        }
+    }
+
+    private fun drawBattery(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        side: Float,
+        active: Int
+    ) {
         val batteryColor = when {
             batteryPercent >= 100 -> Color.rgb(52, 199, 89)
             charging -> Color.rgb(52, 199, 89)
@@ -227,101 +266,99 @@ class DuoIndicatorView(
         paint.color = batteryColor
         paint.textAlign = Paint.Align.CENTER
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        paint.textSize = 58f * s
+        paint.textSize = side * 0.115f
+
         val batteryText = if (batteryPercentageEnabled || batteryPercent <= 20) {
             "${batteryPercent.coerceIn(0, 100)}%"
         } else {
             batteryPercent.coerceIn(0, 100).toString()
         }
-        val batteryFm = paint.fontMetrics
-        val batteryY = Y(36f) - (batteryFm.ascent + batteryFm.descent) / 2f
-        c.drawText(batteryText, cx, batteryY, paint)
 
+        val fm = paint.fontMetrics
+        val centerY = cy - radius - side * 0.105f
+        val baseline = centerY - (fm.ascent + fm.descent) / 2f
+        canvas.drawText(batteryText, cx, baseline, paint)
+    }
+
+    private fun drawConnectivity(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        side: Float,
+        active: Int,
+        inactive: Int
+    ) {
+        val centerY = cy + radius + side * 0.11f
         when {
-            wifiConnected -> drawWifiCompact(c, s, active, inactive, ::X, ::Y)
-            airplaneMode -> drawAirplaneCompact(c, s, active, ::X, ::Y)
+            wifiConnected -> drawWifi(canvas, cx, centerY, side, active, inactive)
+            airplaneMode -> drawAirplane(canvas, cx, centerY, side, active)
             mobileDataConnected && cellularNetworkLabel.isNotEmpty() -> {
                 paint.style = Paint.Style.FILL
                 paint.color = active
                 paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
                 paint.textAlign = Paint.Align.CENTER
-                paint.textSize = 64f * s
+                paint.textSize = side * 0.12f
                 val fm = paint.fontMetrics
-                val textY = Y(382f) - (fm.ascent + fm.descent) / 2f
-                c.drawText(cellularNetworkLabel, cx, textY, paint)
+                val baseline = centerY - (fm.ascent + fm.descent) / 2f
+                canvas.drawText(cellularNetworkLabel, cx, baseline, paint)
             }
         }
     }
 
-    private fun drawSignalArc(
-        c: Canvas,
-        rect: RectF,
-        start: Float,
-        sweep: Float,
-        level: Int,
+    private fun drawWifi(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        side: Float,
         active: Int,
         inactive: Int
     ) {
-        val normalized = level.coerceIn(0, 4) / 4f
-        paint.color = inactive
-        c.drawArc(rect, start, sweep, false, paint)
-        if (normalized > 0f) {
-            paint.color = active
-            c.drawArc(rect, start, sweep * normalized, false, paint)
-        }
-    }
-
-    private fun drawWifiCompact(
-        c: Canvas,
-        s: Float,
-        active: Int,
-        inactive: Int,
-        X: (Float) -> Float,
-        Y: (Float) -> Float
-    ) {
         paint.style = Paint.Style.STROKE
         paint.strokeCap = Paint.Cap.ROUND
-        paint.strokeWidth = 13f * s
+        paint.strokeWidth = side * 0.026f
 
-        val outer = Path().apply {
-            moveTo(X(198f), Y(363f))
-            cubicTo(X(220f), Y(343f), X(254f), Y(343f), X(276f), Y(363f))
-        }
+        val outerRadius = side * 0.082f
+        val midRadius = side * 0.055f
+
         paint.color = if (wifiLevel >= 2) active else inactive
-        c.drawPath(outer, paint)
+        canvas.drawArc(
+            RectF(cx - outerRadius, cy - outerRadius, cx + outerRadius, cy + outerRadius),
+            215f, 110f, false, paint
+        )
 
-        val inner = Path().apply {
-            moveTo(X(216f), Y(381f))
-            cubicTo(X(228f), Y(369f), X(246f), Y(369f), X(258f), Y(381f))
-        }
         paint.color = if (wifiLevel >= 1) active else inactive
-        c.drawPath(inner, paint)
+        canvas.drawArc(
+            RectF(cx - midRadius, cy - midRadius, cx + midRadius, cy + midRadius),
+            220f, 100f, false, paint
+        )
 
         paint.style = Paint.Style.FILL
         paint.color = active
-        c.drawCircle(X(237f), Y(397f), 7f * s, paint)
+        canvas.drawCircle(cx, cy + side * 0.038f, side * 0.014f, paint)
     }
 
-    private fun drawAirplaneCompact(
-        c: Canvas,
-        s: Float,
-        color: Int,
-        X: (Float) -> Float,
-        Y: (Float) -> Float
+    private fun drawAirplane(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        side: Float,
+        color: Int
     ) {
+        val u = side * 0.018f
         val p = Path().apply {
-            moveTo(X(237f), Y(347f))
-            lineTo(X(244f), Y(374f))
-            lineTo(X(274f), Y(389f))
-            lineTo(X(244f), Y(387f))
-            lineTo(X(237f), Y(407f))
-            lineTo(X(230f), Y(387f))
-            lineTo(X(200f), Y(389f))
-            lineTo(X(230f), Y(374f))
+            moveTo(cx, cy - 4.2f * u)
+            lineTo(cx + 1.2f * u, cy - 0.7f * u)
+            lineTo(cx + 4.4f * u, cy + 0.6f * u)
+            lineTo(cx + 1.3f * u, cy + 0.6f * u)
+            lineTo(cx, cy + 3.2f * u)
+            lineTo(cx - 1.3f * u, cy + 0.6f * u)
+            lineTo(cx - 4.4f * u, cy + 0.6f * u)
+            lineTo(cx - 1.2f * u, cy - 0.7f * u)
             close()
         }
         paint.style = Paint.Style.FILL
         paint.color = color
-        c.drawPath(p, paint)
+        canvas.drawPath(p, paint)
     }
 }
