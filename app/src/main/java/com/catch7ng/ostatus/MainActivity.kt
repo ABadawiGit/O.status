@@ -1,12 +1,9 @@
 package com.catch7ng.ostatus
 
 import android.Manifest
-import android.animation.ValueAnimator
 import android.app.AlertDialog
-import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.Configuration
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -14,8 +11,11 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
-import android.view.animation.DecelerateInterpolator
-import android.widget.*
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Switch
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -23,231 +23,180 @@ import androidx.core.content.ContextCompat
 class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
     private val d by lazy { resources.displayMetrics.density }
+    private val bg = Color.rgb(8, 10, 14)
+    private val card = Color.rgb(20, 23, 29)
+    private val cardSoft = Color.rgb(27, 31, 39)
+    private val primary = Color.WHITE
+    private val secondary = Color.rgb(158, 164, 176)
+    private val accent = Color.rgb(88, 166, 255)
+
+    private var preview: RingPreviewView? = null
+    private var colorValue: TextView? = null
     private var overlayValue: TextView? = null
     private var phoneValue: TextView? = null
-    private var dndValue: TextView? = null
-    private var colorValue: TextView? = null
-
-    private val dark get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-    private val pageColor get() = if (dark) Color.BLACK else Color.rgb(242,242,247)
-    private val cardColor get() = if (dark) Color.rgb(28,28,30) else Color.WHITE
-    private val primary get() = if (dark) Color.WHITE else Color.BLACK
-    private val secondary get() = if (dark) Color.rgb(142,142,147) else Color.rgb(99,99,102)
-    private val separator get() = if (dark) Color.rgb(56,56,58) else Color.rgb(229,229,234)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         migrateLegacyColourMode()
-        window.statusBarColor = pageColor
-        window.navigationBarColor = pageColor
-        if (!dark) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
         buildUi()
     }
 
     override fun onResume() {
         super.onResume()
         refreshPermissionStates()
+        preview?.invalidate()
         ensureOverlayStartedIfEnabled()
     }
 
     private fun migrateLegacyColourMode() {
         val current = prefs.getString("color_mode", null)
-        if (current == null || current == "auto") {
-            prefs.edit().putString("color_mode", "white").apply()
-        }
-    }
-
-    private fun ensureOverlayStartedIfEnabled() {
-        if (!prefs.getBoolean("duo_enabled", true)) return
-        if (!Settings.canDrawOverlays(this)) return
-        BootPrefs.setEnabled(this, true)
-        ContextCompat.startForegroundService(this, Intent(this, StatusBarService::class.java))
+        if (current == null || current == "auto") prefs.edit().putString("color_mode", "white").apply()
     }
 
     private fun buildUi() {
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(pageColor)
-            isFillViewport = true
+            setBackgroundColor(bg)
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
         }
-        val content = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(46), dp(20), dp(28))
+            setPadding(dp(20), dp(34), dp(20), dp(30))
         }
 
-        content.addView(TextView(this).apply {
-            text = "O.status"
-            textSize = 34f
-            setTextColor(primary)
+        root.addView(TextView(this).apply {
+            text = "Camera Ring"
+            textSize = 32f
             typeface = Typeface.create("sans-serif", Typeface.BOLD)
-            setPadding(dp(2), 0, 0, dp(4))
+            setTextColor(primary)
+        })
+        root.addView(TextView(this).apply {
+            text = "Dual-SIM status around the punch-hole"
+            textSize = 14f
+            setTextColor(secondary)
+            setPadding(0, dp(3), 0, dp(18))
         })
 
-        sectionTitle(content, "O STATUS BAR")
-        val mainCard = card()
-        val onRow = row("O Status Bar")
-        val enabledSwitch = OStatusSwitch(this).apply {
-            isOn = prefs.getBoolean("duo_enabled", true)
-            onToggleRequested = { requested ->
-                if (requested && !Settings.canDrawOverlays(this@MainActivity)) {
-                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-                    false
-                } else {
-                    prefs.edit().putBoolean("duo_enabled", requested).apply()
-                    BootPrefs.setEnabled(this@MainActivity, requested)
-                    if (requested) ContextCompat.startForegroundService(this@MainActivity, Intent(this@MainActivity, StatusBarService::class.java))
-                    else stopService(Intent(this@MainActivity, StatusBarService::class.java))
-                    true
-                }
-            }
-        }
-        onRow.addView(enabledSwitch, LinearLayout.LayoutParams(dp(51), dp(31)))
-        onRow.setOnClickListener { enabledSwitch.requestToggle() }
-        mainCard.addView(onRow)
-        content.addView(mainCard)
-
-        sectionTitle(content, "APPEARANCE")
-        val appearance = card()
-        val colorRow = row("Indicator Colour")
-        colorValue = colourChoiceLabel(colorName())
-        colorRow.addView(colorValue)
-        colorRow.setOnClickListener { showIndicatorColourMenu() }
-        appearance.addView(colorRow)
-        appearance.addView(separatorView())
-
-        val batteryPercentageRow = row("Battery Percentage")
-        val batteryPercentageSwitch = OStatusSwitch(this).apply {
-            isOn = prefs.getBoolean("battery_percentage", false)
-            onToggleRequested = { requested ->
-                prefs.edit().putBoolean("battery_percentage", requested).apply()
-                BootPrefs.setBatteryPercentage(this@MainActivity, requested)
-                refreshOverlay()
-                true
-            }
-        }
-        batteryPercentageRow.addView(batteryPercentageSwitch, LinearLayout.LayoutParams(dp(51), dp(31)))
-        batteryPercentageRow.setOnClickListener { batteryPercentageSwitch.requestToggle() }
-        appearance.addView(batteryPercentageRow)
-        appearance.addView(separatorView())
-
-        val positionRow = row("Position & Size")
-        positionRow.addView(ForwardChevronView(this), LinearLayout.LayoutParams(dp(18), dp(32)))
-        positionRow.setOnClickListener { startActivity(Intent(this, PositionSizeActivity::class.java)) }
-        appearance.addView(positionRow)
-        content.addView(appearance)
-
-        sectionTitle(content, "PERMISSIONS")
-        val permissions = card()
-        val overlayRow = permissionRow("Display Over Apps") {
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-        }
-        overlayValue = overlayRow.second
-        permissions.addView(overlayRow.first)
-        permissions.addView(separatorView())
-
-        val phoneRow = permissionRow("Phone Status") {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_PHONE_STATE), 10)
-        }
-        phoneValue = phoneRow.second
-        permissions.addView(phoneRow.first)
-        permissions.addView(separatorView())
-
-        val dndRow = permissionRow("Do Not Disturb Access") {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
-        }
-        dndValue = dndRow.second
-        permissions.addView(dndRow.first)
-        content.addView(permissions)
-
-        sectionTitle(content, "OPTIONS")
-        val options = card()
-        val detailsRow = row("Details")
-        detailsRow.addView(ForwardChevronView(this), LinearLayout.LayoutParams(dp(18), dp(32)))
-        detailsRow.setOnClickListener { startActivity(Intent(this, DetailsActivity::class.java)) }
-        options.addView(detailsRow)
-        content.addView(options)
-
-        val footer = LinearLayout(this).apply {
+        val previewCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(0, dp(22), 0, dp(8))
+            setPadding(dp(12), dp(12), dp(12), dp(10))
+            background = rounded(card, 22)
         }
-        fun footerText(value: String, clickable: Boolean = false) = TextView(this).apply {
-            text = value
-            textSize = 11.5f
+        preview = RingPreviewView().also {
+            previewCard.addView(it, LinearLayout.LayoutParams(-1, dp(190)))
+        }
+        previewCard.addView(TextView(this).apply {
+            text = "SIM 2  ·  camera  ·  SIM 1"
+            textSize = 12f
             setTextColor(secondary)
             gravity = Gravity.CENTER
-            if (clickable) {
-                setOnClickListener {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/CATCHINGL")))
-                }
-            }
-        }
-        val footerMain = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
-        footerMain.addView(footerText("V${displayVersion()}"))
-        footerMain.addView(footerText("  ·  "))
-        footerMain.addView(footerText("GitHub", true))
-        footerMain.addView(footerText("  ·  "))
-        footerMain.addView(footerText("© 2026 CATCH7NG.L"))
-        footer.addView(footerMain)
-        content.addView(footer)
+        })
+        root.addView(previewCard)
 
-        scroll.addView(content)
-        scroll.viewTreeObserver.addOnGlobalLayoutListener {
-            val child = scroll.getChildAt(0)
-            val fits = child != null && child.height <= scroll.height
-            scroll.setOnTouchListener(if (fits) View.OnTouchListener { _, _ -> true } else null)
-        }
-        GeistTypography.apply(scroll)
+        root.addView(section("RING"))
+        val ringCard = panel()
+        ringCard.addView(toggleRow("Enable camera ring", prefs.getBoolean("duo_enabled", true)) { enabled ->
+            prefs.edit().putBoolean("duo_enabled", enabled).apply()
+            BootPrefs.setEnabled(this, enabled)
+            if (enabled) requestOverlayOrStart() else stopService(Intent(this, StatusBarService::class.java))
+        })
+        ringCard.addView(divider())
+        ringCard.addView(actionRow("Position & size", "Fine tune") {
+            startActivity(Intent(this, PositionSizeActivity::class.java))
+        })
+        root.addView(ringCard)
+
+        root.addView(section("APPEARANCE"))
+        val appearance = panel()
+        colorValue = valueChip(colorName())
+        appearance.addView(actionRowWithView("Ring colour", colorValue!!) { showColourMenu() })
+        appearance.addView(divider())
+        appearance.addView(toggleRow("Show battery percentage", prefs.getBoolean("battery_percentage", true)) { enabled ->
+            prefs.edit().putBoolean("battery_percentage", enabled).apply()
+            BootPrefs.setBatteryPercentage(this, enabled)
+            refreshOverlay()
+            preview?.invalidate()
+        })
+        appearance.addView(divider())
+        appearance.addView(toggleRow("Show 4G / 5G label", prefs.getBoolean("show_network_label", true)) { enabled ->
+            prefs.edit().putBoolean("show_network_label", enabled).apply()
+            refreshOverlay()
+            preview?.invalidate()
+        })
+        root.addView(appearance)
+
+        root.addView(section("PERMISSIONS"))
+        val permissions = panel()
+        overlayValue = permissionChip()
+        permissions.addView(actionRowWithView("Display over apps", overlayValue!!) {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        })
+        permissions.addView(divider())
+        phoneValue = permissionChip()
+        permissions.addView(actionRowWithView("Dual-SIM signal access", phoneValue!!) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_PHONE_STATE), 10)
+        })
+        root.addView(permissions)
+
+        root.addView(TextView(this).apply {
+            text = "Preview build · Camera Ring"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(100, 106, 118))
+            setPadding(0, dp(24), 0, dp(4))
+        })
+
+        scroll.addView(root)
         setContentView(scroll)
         refreshPermissionStates()
     }
 
-    private fun showIndicatorColourMenu() {
-        val labels = arrayOf("White", "Black", "Custom")
+    private fun showColourMenu() {
+        val labels = arrayOf("White", "Black", "Custom…")
         val current = prefs.getString("color_mode", "white") ?: "white"
-        val checked = when (current) {
-            "black" -> 1
-            "custom" -> 2
-            else -> 0
-        }
-
+        val checked = when (current) { "black" -> 1; "custom" -> 2; else -> 0 }
         AlertDialog.Builder(this)
-            .setTitle("Indicator Colour")
+            .setTitle("Ring colour")
             .setSingleChoiceItems(labels, checked) { dialog, which ->
                 when (which) {
-                    0 -> {
-                        prefs.edit().putString("color_mode", "white").apply()
-                        colorValue?.text = "White"
+                    0 -> applyColour("white", Color.WHITE, dialog)
+                    1 -> applyColour("black", Color.BLACK, dialog)
+                    else -> {
                         dialog.dismiss()
-                        refreshOverlay()
-                    }
-                    1 -> {
-                        prefs.edit().putString("color_mode", "black").apply()
-                        colorValue?.text = "Black"
-                        dialog.dismiss()
-                        refreshOverlay()
-                    }
-                    2 -> {
-                        dialog.dismiss()
-                        val initial = prefs.getInt("custom_color", Color.WHITE)
-                        IndicatorColorPickerDialog.show(this, initial) { color ->
-                            prefs.edit()
-                                .putString("color_mode", "custom")
-                                .putInt("custom_color", color)
-                                .apply()
-                            colorValue?.text = "Custom"
-                            refreshOverlay()
+                        IndicatorColorPickerDialog.show(this, prefs.getInt("custom_color", Color.rgb(88,166,255))) { color ->
+                            prefs.edit().putString("color_mode", "custom").putInt("custom_color", color).apply()
+                            colorValue?.text = String.format("#%06X", 0xFFFFFF and color)
+                            refreshOverlay(); preview?.invalidate()
                         }
                     }
                 }
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private fun applyColour(mode: String, color: Int, dialog: android.content.DialogInterface) {
+        prefs.edit().putString("color_mode", mode).putInt("custom_color", color).apply()
+        colorValue?.text = if (mode == "white") "White" else "Black"
+        dialog.dismiss(); refreshOverlay(); preview?.invalidate()
+    }
+
+    private fun requestOverlayOrStart() {
+        if (!Settings.canDrawOverlays(this)) {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        } else {
+            ContextCompat.startForegroundService(this, Intent(this, StatusBarService::class.java))
+        }
+    }
+
+    private fun ensureOverlayStartedIfEnabled() {
+        if (prefs.getBoolean("duo_enabled", true) && Settings.canDrawOverlays(this)) {
+            BootPrefs.setEnabled(this, true)
+            ContextCompat.startForegroundService(this, Intent(this, StatusBarService::class.java))
+        }
     }
 
     private fun refreshOverlay() {
@@ -261,173 +210,130 @@ class MainActivity : AppCompatActivity() {
         phoneValue?.let {
             setPermission(it, ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED)
         }
-        dndValue?.let {
-            setPermission(it, getSystemService(NotificationManager::class.java).isNotificationPolicyAccessGranted)
-        }
     }
 
     private fun setPermission(v: TextView, granted: Boolean) {
-        v.text = if (granted) "Allowed" else "Required  ›"
-        v.setTextColor(if (granted) secondary else primary)
+        v.text = if (granted) "Allowed" else "Required"
+        v.setTextColor(if (granted) Color.rgb(82, 210, 122) else Color.rgb(255, 190, 74))
     }
 
-    private inner class OStatusSwitch(context: android.content.Context) : View(context) {
-        var isOn: Boolean = false
-            set(value) {
-                field = value
-                progress = if (value) 1f else 0f
-                invalidate()
-            }
-
-        var onToggleRequested: ((Boolean) -> Boolean)? = null
-        private var progress = 0f
-        private var animator: ValueAnimator? = null
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-        init {
-            isClickable = true
-            isFocusable = true
-            contentDescription = "O Status Bar"
-            setOnClickListener { requestToggle() }
-        }
-
-        fun requestToggle() {
-            val requested = !isOn
-            val accepted = onToggleRequested?.invoke(requested) ?: true
-            if (accepted) setOnAnimated(requested)
-        }
-
-        private fun setOnAnimated(value: Boolean) {
-            if (isOn == value) return
-            val start = progress
-            isOn = value
-            progress = start
-            val target = if (value) 1f else 0f
-            animator?.cancel()
-            animator = ValueAnimator.ofFloat(start, target).apply {
-                duration = 180L
-                interpolator = DecelerateInterpolator()
-                addUpdateListener {
-                    progress = it.animatedValue as Float
-                    invalidate()
-                }
-                start()
-            }
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val w = width.toFloat()
-            val h = height.toFloat()
-            if (w <= 0f || h <= 0f) return
-
-            val offTrack = if (dark) Color.rgb(58,58,60) else Color.rgb(229,229,234)
-            val onTrack = if (dark) Color.WHITE else Color.BLACK
-            paint.color = blend(offTrack, onTrack, progress)
-            canvas.drawRoundRect(0f, 0f, w, h, h / 2f, h / 2f, paint)
-
-            val pad = dp(2).toFloat()
-            val radius = (h - pad * 2f) / 2f
-            val leftCx = pad + radius
-            val rightCx = w - pad - radius
-            val cx = leftCx + (rightCx - leftCx) * progress
-
-            paint.color = if (dark && progress > .5f) Color.BLACK else Color.WHITE
-            paint.setShadowLayer(dp(1).toFloat(), 0f, dp(1).toFloat(), 0x33000000)
-            setLayerType(LAYER_TYPE_SOFTWARE, paint)
-            canvas.drawCircle(cx, h / 2f, radius, paint)
-            paint.clearShadowLayer()
-        }
-
-        private fun blend(a: Int, b: Int, t: Float): Int {
-            val clamped = t.coerceIn(0f, 1f)
-            return Color.rgb(
-                (Color.red(a) + (Color.red(b) - Color.red(a)) * clamped).toInt(),
-                (Color.green(a) + (Color.green(b) - Color.green(a)) * clamped).toInt(),
-                (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * clamped).toInt()
-            )
-        }
-    }
-
-    private fun displayVersion(): String {
-        return packageManager.getPackageInfo(packageName, 0).versionName ?: "2.0.0"
-    }
-
-    private fun colorName() = when (prefs.getString("color_mode", "white")) {
-        "black" -> "Black"
-        "custom" -> "Custom"
-        else -> "White"
-    }
-
-    private fun sectionTitle(parent: LinearLayout, title: String) {
-        parent.addView(TextView(this).apply {
-            text = title
-            textSize = 12f
-            setTextColor(secondary)
-            setPadding(dp(16), dp(18), 0, dp(6))
-        })
-    }
-
-    private fun card(radius: Float = 14f) = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        background = GradientDrawable().apply {
-            setColor(cardColor)
-            cornerRadius = dp(radius.toInt()).toFloat()
-        }
-        clipToOutline = true
-    }
-
-    private fun row(title: String): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(9), dp(14), dp(9))
-            minimumHeight = dp(54)
-            addView(TextView(this@MainActivity).apply {
-                text = title
-                textSize = 16f
-                setTextColor(primary)
-                gravity = Gravity.CENTER_VERTICAL
-            }, LinearLayout.LayoutParams(0, -1, 1f))
-        }
-    }
-
-    private fun permissionRow(title: String, click: () -> Unit): Pair<LinearLayout, TextView> {
-        val r = row(title)
-        val v = valueLabel("")
-        r.addView(v)
-        r.setOnClickListener { click() }
-        return Pair(r, v)
-    }
-
-    private fun valueLabel(value: String) = TextView(this).apply {
-        text = value
-        textSize = 15f
+    private fun section(title: String) = TextView(this).apply {
+        text = title
+        textSize = 11f
+        letterSpacing = .12f
         setTextColor(secondary)
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(10), 0, 0, 0)
+        setPadding(dp(4), dp(20), 0, dp(8))
     }
 
-    private fun colourChoiceLabel(value: String) = TextView(this).apply {
-        text = value
-        textSize = 14f
-        setTextColor(Color.WHITE)
-        gravity = Gravity.CENTER
-        setPadding(dp(12), 0, dp(12), 0)
-        minWidth = dp(64)
-        minimumHeight = dp(32)
-        background = GradientDrawable().apply {
-            setColor(if (dark) Color.rgb(58,58,60) else Color.rgb(44,44,46))
-            cornerRadius = dp(9).toFloat()
+    private fun panel() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(card, 20)
+    }
+
+    private fun toggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit): View {
+        val row = baseRow(title)
+        val sw = Switch(this).apply {
+            isChecked = checked
+            buttonTintList = null
+            setOnCheckedChangeListener { _, isChecked -> onChange(isChecked) }
         }
+        row.addView(sw, LinearLayout.LayoutParams(-2, -2))
+        return row
     }
 
-    private fun separatorView() = View(this).apply {
-        setBackgroundColor(separator)
+    private fun actionRow(title: String, value: String, click: () -> Unit): View {
+        val chip = valueChip(value)
+        return actionRowWithView(title, chip, click)
+    }
+
+    private fun actionRowWithView(title: String, right: View, click: () -> Unit): View {
+        val row = baseRow(title)
+        row.addView(right)
+        row.setOnClickListener { click() }
+        return row
+    }
+
+    private fun baseRow(title: String) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(16), dp(11), dp(14), dp(11))
+        minimumHeight = dp(58)
+        addView(TextView(this@MainActivity).apply {
+            text = title
+            textSize = 15.5f
+            setTextColor(primary)
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+    }
+
+    private fun valueChip(value: String) = TextView(this).apply {
+        text = value
+        textSize = 12.5f
+        gravity = Gravity.CENTER
+        setTextColor(Color.rgb(206, 213, 225))
+        setPadding(dp(10), 0, dp(10), 0)
+        minimumHeight = dp(30)
+        background = rounded(cardSoft, 10)
+    }
+
+    private fun permissionChip() = valueChip("")
+
+    private fun divider() = View(this).apply {
+        setBackgroundColor(Color.rgb(39, 43, 52))
         layoutParams = LinearLayout.LayoutParams(-1, 1).apply { marginStart = dp(16) }
     }
 
-    private fun dp(v: Int) = (v * d + 0.5f).toInt()
+    private fun rounded(color: Int, radius: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radius).toFloat()
+    }
+
+    private fun colorName(): String = when (prefs.getString("color_mode", "white")) {
+        "black" -> "Black"
+        "custom" -> String.format("#%06X", 0xFFFFFF and prefs.getInt("custom_color", Color.WHITE))
+        else -> "White"
+    }
+
+    private inner class RingPreviewView : View(this) {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
+        override fun onDraw(c: Canvas) {
+            super.onDraw(c)
+            val cx = width / 2f
+            val cy = height / 2f + dp(4)
+            val r = minOf(width, height) * .23f
+            val color = when (prefs.getString("color_mode", "white")) {
+                "black" -> Color.rgb(210,210,215)
+                "custom" -> prefs.getInt("custom_color", accent)
+                else -> Color.WHITE
+            }
+            val inactive = Color.argb(55, Color.red(color), Color.green(color), Color.blue(color))
+            p.style = Paint.Style.FILL
+            p.color = Color.BLACK
+            c.drawCircle(cx, cy, r * .45f, p)
+            p.style = Paint.Style.STROKE
+            p.strokeWidth = dp(7).toFloat()
+            val rect = RectF(cx-r, cy-r, cx+r, cy+r)
+            repeat(4) { i ->
+                p.color = if (i < 3) color else inactive
+                c.drawArc(rect, 108f + i*35f, 28f, false, p)
+            }
+            repeat(4) { i ->
+                p.color = if (i < 2) color else inactive
+                c.drawArc(rect, 288f + i*35f, 28f, false, p)
+            }
+            p.style = Paint.Style.FILL
+            p.typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            p.textAlign = Paint.Align.CENTER
+            p.textSize = dp(18).toFloat()
+            p.color = color
+            c.drawText("50%", cx, cy-r-dp(12), p)
+            if (prefs.getBoolean("show_network_label", true)) {
+                p.textSize = dp(14).toFloat()
+                c.drawText("5G", cx, cy+r+dp(24), p)
+            }
+        }
+    }
+
+    private fun dp(v: Int) = (v * d + .5f).toInt()
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
