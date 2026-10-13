@@ -18,6 +18,8 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import kotlin.math.cos
+import kotlin.math.sin
 
 class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
@@ -73,7 +75,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(primary)
         })
         root.addView(TextView(this).apply {
-            text = "Dual-SIM status around the punch-hole"
+            text = "Dual-SIM status halo around the punch-hole"
             textSize = 14f
             setTextColor(secondary)
             setPadding(0, dp(3), 0, dp(18))
@@ -89,7 +91,7 @@ class MainActivity : AppCompatActivity() {
             previewCard.addView(it, LinearLayout.LayoutParams(-1, dp(190)))
         }
         previewCard.addView(TextView(this).apply {
-            text = "SIM 2  ·  camera  ·  SIM 1"
+            text = "SIM 2  ·  status halo  ·  SIM 1"
             textSize = 12f
             setTextColor(secondary)
             gravity = Gravity.CENTER
@@ -98,7 +100,7 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(section("RING"))
         val ringCard = panel()
-        ringCard.addView(toggleRow("Enable camera ring", prefs.getBoolean("duo_enabled", true)) { enabled ->
+        ringCard.addView(toggleRow("Enable status halo", prefs.getBoolean("duo_enabled", true)) { enabled ->
             prefs.edit().putBoolean("duo_enabled", enabled).apply()
             BootPrefs.setEnabled(this, enabled)
             if (enabled) requestOverlayOrStart() else stopService(Intent(this, StatusBarService::class.java))
@@ -112,14 +114,14 @@ class MainActivity : AppCompatActivity() {
         root.addView(section("APPEARANCE"))
         val appearance = panel()
         colorValue = valueChip(colorName())
-        appearance.addView(actionRowWithView("Ring colour", colorValue!!) { showColourMenu() })
+        appearance.addView(actionRowWithView("Halo colour", colorValue!!) { showColourMenu() })
         appearance.addView(divider())
 
         batteryColorValue = valueChip(batteryColorName())
-        appearance.addView(actionRowWithView("Battery colour", batteryColorValue!!) { showBatteryColourMenu() })
+        appearance.addView(actionRowWithView("Battery dots colour", batteryColorValue!!) { showBatteryColourMenu() })
         appearance.addView(divider())
 
-        appearance.addView(toggleRow("Show battery percentage", prefs.getBoolean("battery_percentage", true)) { enabled ->
+        appearance.addView(toggleRow("Show battery dots", prefs.getBoolean("battery_percentage", true)) { enabled ->
             prefs.edit().putBoolean("battery_percentage", enabled).apply()
             BootPrefs.setBatteryPercentage(this, enabled)
             refreshOverlay()
@@ -147,7 +149,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(permissions)
 
         root.addView(TextView(this).apply {
-            text = "Preview build · Camera Ring"
+            text = "Preview build · Status Halo"
             textSize = 11f
             gravity = Gravity.CENTER
             setTextColor(Color.rgb(100, 106, 118))
@@ -164,7 +166,7 @@ class MainActivity : AppCompatActivity() {
         val current = prefs.getString("color_mode", "white") ?: "white"
         val checked = when (current) { "black" -> 1; "custom" -> 2; else -> 0 }
         AlertDialog.Builder(this)
-            .setTitle("Ring colour")
+            .setTitle("Halo colour")
             .setSingleChoiceItems(labels, checked) { dialog, which ->
                 when (which) {
                     0 -> applyColour("white", Color.WHITE, dialog)
@@ -186,22 +188,19 @@ class MainActivity : AppCompatActivity() {
     private fun showBatteryColourMenu() {
         val customEnabled = prefs.getBoolean("battery_custom_color_enabled", false)
         val checked = if (customEnabled) 1 else 0
-        val labels = arrayOf("Match ring colour", "Custom…")
+        val labels = arrayOf("Match halo colour", "Custom…")
         AlertDialog.Builder(this)
-            .setTitle("Battery colour")
+            .setTitle("Battery dots colour")
             .setSingleChoiceItems(labels, checked) { dialog, which ->
                 if (which == 0) {
                     prefs.edit().putBoolean("battery_custom_color_enabled", false).apply()
-                    batteryColorValue?.text = "Ring"
+                    batteryColorValue?.text = "Halo"
                     dialog.dismiss()
                     refreshOverlay(); preview?.invalidate()
                 } else {
                     dialog.dismiss()
                     IndicatorColorPickerDialog.show(this, prefs.getInt("battery_custom_color", Color.WHITE)) { color ->
-                        prefs.edit()
-                            .putBoolean("battery_custom_color_enabled", true)
-                            .putInt("battery_custom_color", color)
-                            .apply()
+                        prefs.edit().putBoolean("battery_custom_color_enabled", true).putInt("battery_custom_color", color).apply()
                         batteryColorValue?.text = String.format("#%06X", 0xFFFFFF and color)
                         refreshOverlay(); preview?.invalidate()
                     }
@@ -220,9 +219,7 @@ class MainActivity : AppCompatActivity() {
     private fun requestOverlayOrStart() {
         if (!Settings.canDrawOverlays(this)) {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-        } else {
-            ContextCompat.startForegroundService(this, Intent(this, StatusBarService::class.java))
-        }
+        } else ContextCompat.startForegroundService(this, Intent(this, StatusBarService::class.java))
     }
 
     private fun ensureOverlayStartedIfEnabled() {
@@ -240,9 +237,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshPermissionStates() {
         overlayValue?.let { setPermission(it, Settings.canDrawOverlays(this)) }
-        phoneValue?.let {
-            setPermission(it, ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED)
-        }
+        phoneValue?.let { setPermission(it, ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) }
     }
 
     private fun setPermission(v: TextView, granted: Boolean) {
@@ -258,32 +253,19 @@ class MainActivity : AppCompatActivity() {
         setPadding(dp(4), dp(20), 0, dp(8))
     }
 
-    private fun panel() = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        background = rounded(card, 20)
-    }
+    private fun panel() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = rounded(card, 20) }
 
     private fun toggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit): View {
         val row = baseRow(title)
-        val sw = Switch(this).apply {
-            isChecked = checked
-            buttonTintList = null
-            setOnCheckedChangeListener { _, isChecked -> onChange(isChecked) }
-        }
+        val sw = Switch(this).apply { isChecked = checked; buttonTintList = null; setOnCheckedChangeListener { _, value -> onChange(value) } }
         row.addView(sw, LinearLayout.LayoutParams(-2, -2))
         return row
     }
 
-    private fun actionRow(title: String, value: String, click: () -> Unit): View {
-        val chip = valueChip(value)
-        return actionRowWithView(title, chip, click)
-    }
+    private fun actionRow(title: String, value: String, click: () -> Unit): View = actionRowWithView(title, valueChip(value), click)
 
     private fun actionRowWithView(title: String, right: View, click: () -> Unit): View {
-        val row = baseRow(title)
-        row.addView(right)
-        row.setOnClickListener { click() }
-        return row
+        val row = baseRow(title); row.addView(right); row.setOnClickListener { click() }; return row
     }
 
     private fun baseRow(title: String) = LinearLayout(this).apply {
@@ -291,34 +273,16 @@ class MainActivity : AppCompatActivity() {
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(16), dp(11), dp(14), dp(11))
         minimumHeight = dp(58)
-        addView(TextView(this@MainActivity).apply {
-            text = title
-            textSize = 15.5f
-            setTextColor(primary)
-        }, LinearLayout.LayoutParams(0, -2, 1f))
+        addView(TextView(this@MainActivity).apply { text = title; textSize = 15.5f; setTextColor(primary) }, LinearLayout.LayoutParams(0, -2, 1f))
     }
 
     private fun valueChip(value: String) = TextView(this).apply {
-        text = value
-        textSize = 12.5f
-        gravity = Gravity.CENTER
-        setTextColor(Color.rgb(206, 213, 225))
-        setPadding(dp(10), 0, dp(10), 0)
-        minimumHeight = dp(30)
-        background = rounded(cardSoft, 10)
+        text = value; textSize = 12.5f; gravity = Gravity.CENTER; setTextColor(Color.rgb(206, 213, 225)); setPadding(dp(10), 0, dp(10), 0); minimumHeight = dp(30); background = rounded(cardSoft, 10)
     }
 
     private fun permissionChip() = valueChip("")
-
-    private fun divider() = View(this).apply {
-        setBackgroundColor(Color.rgb(39, 43, 52))
-        layoutParams = LinearLayout.LayoutParams(-1, 1).apply { marginStart = dp(16) }
-    }
-
-    private fun rounded(color: Int, radius: Int) = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = dp(radius).toFloat()
-    }
+    private fun divider() = View(this).apply { setBackgroundColor(Color.rgb(39, 43, 52)); layoutParams = LinearLayout.LayoutParams(-1, 1).apply { marginStart = dp(16) } }
+    private fun rounded(color: Int, radius: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radius).toFloat() }
 
     private fun colorName(): String = when (prefs.getString("color_mode", "white")) {
         "black" -> "Black"
@@ -328,15 +292,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun batteryColorName(): String = if (prefs.getBoolean("battery_custom_color_enabled", false)) {
         String.format("#%06X", 0xFFFFFF and prefs.getInt("battery_custom_color", Color.WHITE))
-    } else "Ring"
+    } else "Halo"
 
     private inner class RingPreviewView : View(this) {
-        private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
         override fun onDraw(c: Canvas) {
             super.onDraw(c)
             val cx = width / 2f
             val cy = height / 2f + dp(4)
-            val r = minOf(width, height) * .23f
+            val r = minOf(width, height) * .24f
             val color = when (prefs.getString("color_mode", "white")) {
                 "black" -> Color.rgb(210,210,215)
                 "custom" -> prefs.getInt("custom_color", accent)
@@ -345,37 +309,37 @@ class MainActivity : AppCompatActivity() {
             val inactive = Color.argb(70, Color.red(color), Color.green(color), Color.blue(color))
             p.style = Paint.Style.FILL
             p.color = Color.BLACK
-            c.drawCircle(cx, cy, r * .45f, p)
-            p.style = Paint.Style.STROKE
-            p.strokeWidth = dp(7).toFloat()
-            val rect = RectF(cx-r, cy-r, cx+r, cy+r)
+            c.drawCircle(cx, cy, r * .44f, p)
+
+            fun drawDotArc(startDeg: Float, activeCount: Int) {
+                repeat(4) { i ->
+                    val a = Math.toRadians((startDeg + i * 17f).toDouble())
+                    val x = cx + cos(a).toFloat() * r
+                    val y = cy + sin(a).toFloat() * r
+                    p.color = if (i < activeCount) color else inactive
+                    c.drawCircle(x, y, dp(4.2f), p)
+                }
+            }
+            drawDotArc(122f, 3)
+            drawDotArc(302f, 2)
+
+            val batteryColor = if (prefs.getBoolean("battery_custom_color_enabled", false)) prefs.getInt("battery_custom_color", color) else color
+            val batteryScale = prefs.getInt("battery_label_size_pct", 120).coerceIn(70,220) / 100f
+            val dotR = dp(3.4f) * batteryScale
+            repeat(4) { i ->
+                p.color = if (i < 3) batteryColor else Color.argb(70, Color.red(batteryColor), Color.green(batteryColor), Color.blue(batteryColor))
+                c.drawCircle(cx + (i - 1.5f) * dotR * 2.6f, cy - r - dp(16), dotR, p)
+            }
+
             repeat(4) { i ->
                 p.color = if (i < 3) color else inactive
-                c.drawArc(rect, 108f + i*35f, 28f, false, p)
-            }
-            repeat(4) { i ->
-                p.color = if (i < 2) color else inactive
-                c.drawArc(rect, 288f + i*35f, 28f, false, p)
-            }
-            p.style = Paint.Style.FILL
-            p.typeface = Typeface.create("sans-serif", Typeface.BOLD)
-            p.textAlign = Paint.Align.CENTER
-            val batteryScale = prefs.getInt("battery_label_size_pct", 120).coerceIn(70,220) / 100f
-            p.textSize = dp(15).toFloat() * batteryScale
-            p.color = if (prefs.getBoolean("battery_custom_color_enabled", false)) {
-                prefs.getInt("battery_custom_color", color)
-            } else color
-            c.drawText("50%", cx, cy-r-dp(12), p)
-            if (prefs.getBoolean("show_network_label", true)) {
-                val networkScale = prefs.getInt("network_label_size_pct", 135).coerceIn(70,220) / 100f
-                p.textSize = dp(12).toFloat() * networkScale
-                p.color = color
-                c.drawText("5G", cx, cy+r+dp(24), p)
+                c.drawCircle(cx + (i - 1.5f) * dp(8.5f), cy + r + dp(20), dp(3.4f), p)
             }
         }
     }
 
     private fun dp(v: Int) = (v * d + .5f).toInt()
+    private fun dp(v: Float) = v * d
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
