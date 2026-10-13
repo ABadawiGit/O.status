@@ -26,14 +26,22 @@ class DuoIndicatorView(
 
     var batteryPercent = 0
     var charging = false
+
     private var powerSaveMode = false
     private var wifiConnected = false
     private var wifiLevel = 0
-    private var cellularLevel = 0
-    private var cellularNetworkLabel = ""
     private var mobileDataConnected = false
     private var airplaneMode = false
-    private var trackedSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
+
+    // Slot order is deliberate: [0] = SIM 1, [1] = SIM 2.
+    private val simLevels = intArrayOf(0, 0)
+    private val simSubIds = intArrayOf(
+        SubscriptionManager.INVALID_SUBSCRIPTION_ID,
+        SubscriptionManager.INVALID_SUBSCRIPTION_ID
+    )
+
+    private var cellularNetworkLabel = ""
+    private var trackedDataSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
     private var networkDisplayTracker: NetworkDisplayTracker? = null
     private var shizukuAutoBlack: Boolean? = null
 
@@ -60,6 +68,7 @@ class DuoIndicatorView(
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
+
     private val handler = Handler(Looper.getMainLooper())
     private val poll = object : Runnable {
         override fun run() {
@@ -72,11 +81,12 @@ class DuoIndicatorView(
     }
 
     fun start() { handler.post(poll) }
+
     fun stop() {
         handler.removeCallbacks(poll)
         networkDisplayTracker?.stop()
         networkDisplayTracker = null
-        trackedSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
+        trackedDataSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
     }
 
     private fun isBlackIndicator(): Boolean = when (colorMode) {
@@ -90,7 +100,9 @@ class DuoIndicatorView(
         powerSaveMode = pm.isPowerSaveMode
         airplaneMode = try {
             Settings.Global.getInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1
-        } catch (_: Exception) { false }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun refreshWifi() {
@@ -104,43 +116,76 @@ class DuoIndicatorView(
             val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             @Suppress("DEPRECATION") val rssi = wm.connectionInfo.rssi
             wifiLevel = WifiManager.calculateSignalLevel(rssi, 4).coerceIn(0, 3)
-        } else wifiLevel = 0
+        } else {
+            wifiLevel = 0
+        }
+    }
+
+    private fun resetSimState() {
+        simLevels[0] = 0
+        simLevels[1] = 0
+        simSubIds[0] = SubscriptionManager.INVALID_SUBSCRIPTION_ID
+        simSubIds[1] = SubscriptionManager.INVALID_SUBSCRIPTION_ID
     }
 
     private fun refreshCellular() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-            cellularLevel = 0
+            resetSimState()
             cellularNetworkLabel = ""
             return
         }
+
         try {
+            resetSimState()
             val base = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            val subscriptions = context.getSystemService(SubscriptionManager::class.java)
+            val active = subscriptions.activeSubscriptionInfoList
+                ?.sortedBy { it.simSlotIndex }
+                .orEmpty()
+
+            active.take(2).forEach { info ->
+                val slot = info.simSlotIndex
+                if (slot !in 0..1) return@forEach
+
+                val tm = base.createForSubscriptionId(info.subscriptionId)
+                @Suppress("DEPRECATION")
+                val level = tm.signalStrength?.level?.coerceIn(0, 4) ?: 0
+                simLevels[slot] = level
+                simSubIds[slot] = info.subscriptionId
+            }
+
             val defaultDataSubId = SubscriptionManager.getDefaultDataSubscriptionId()
-            val tm = if (SubscriptionManager.isValidSubscriptionId(defaultDataSubId)) base.createForSubscriptionId(defaultDataSubId) else base
-            if (trackedSubId != defaultDataSubId) {
+            val dataTm = if (SubscriptionManager.isValidSubscriptionId(defaultDataSubId)) {
+                base.createForSubscriptionId(defaultDataSubId)
+            } else {
+                base
+            }
+
+            if (trackedDataSubId != defaultDataSubId) {
                 networkDisplayTracker?.stop()
-                trackedSubId = defaultDataSubId
-                networkDisplayTracker = NetworkDisplayTracker(tm, context.mainExecutor) {
-                    handler.post { refreshCellular(); invalidate() }
+                trackedDataSubId = defaultDataSubId
+                networkDisplayTracker = NetworkDisplayTracker(dataTm, context.mainExecutor) {
+                    handler.post {
+                        refreshCellular()
+                        invalidate()
+                    }
                 }.also { it.start() }
             }
 
-            // Keep aggregate Default Data SIM signal level.
-            @Suppress("DEPRECATION") val signal = tm.signalStrength
-            cellularLevel = signal?.level?.coerceIn(0, 4) ?: 0
-
-            @Suppress("DEPRECATION") val fallbackType = tm.dataNetworkType
-            cellularNetworkLabel = NetworkDisplayTracker.label(networkDisplayTracker?.displayInfo, fallbackType).let {
-                if (it == "4G" || it == "5G") it else ""
-            }
+            @Suppress("DEPRECATION") val fallbackType = dataTm.dataNetworkType
+            cellularNetworkLabel = NetworkDisplayTracker.label(
+                networkDisplayTracker?.displayInfo,
+                fallbackType
+            ).let { if (it == "4G" || it == "5G") it else "" }
         } catch (_: Exception) {
-            cellularLevel = 0
+            resetSimState()
             cellularNetworkLabel = ""
         }
     }
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
+
         val black = isBlackIndicator()
         val active = if (black) Color.BLACK else Color.WHITE
         val inactive = if (black) 0x38000000 else 0x55FFFFFF
@@ -149,127 +194,135 @@ class DuoIndicatorView(
         fun X(v: Float) = width / 2f + (v - 237f) * s
         fun Y(v: Float) = height / 2f + (v - 211f) * s
 
-        val cx = X(237f); val cy = Y(211f); val r = 163f * s
-        val rect = RectF(cx-r, cy-r, cx+r, cy+r)
+        val cx = X(237f)
+        val cy = Y(211f)
+        val r = 154f * s
+        val rect = RectF(cx - r, cy - r, cx + r, cy + r)
 
-        val batteryProgressColor = when {
-            batteryPercent >= 100 -> Color.rgb(52,199,89)
-            charging -> Color.rgb(52,199,89)
-            powerSaveMode -> Color.rgb(255,204,0)
-            batteryPercent <= 20 -> Color.rgb(255,59,48)
-            else -> active
-        }
-        val showBatteryPercentage = batteryPercentageEnabled || batteryPercent <= 20
+        // Camera ring: left half = SIM 2, right half = SIM 1.
+        // A gap at the top is reserved for battery text and a gap at the bottom
+        // is reserved for Wi-Fi / mobile-data / airplane state.
+        val leftStart = 110f
+        val leftSweep = 140f
+        val rightStart = 290f
+        val rightSweep = 140f
 
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 26f * s
+        paint.strokeWidth = 24f * s
         paint.strokeCap = Paint.Cap.ROUND
 
-        if (!showBatteryPercentage) {
-            val start = 151.5f
-            val sweep = 237f
-            paint.color = inactive
-            c.drawArc(rect, start, sweep, false, paint)
-            paint.color = batteryProgressColor
-            c.drawArc(rect, start, sweep * (batteryPercent.coerceIn(0,100)/100f), false, paint)
-        } else {
-            // Percentage mode is derived from the ORIGINAL locked C-ring.
-            // Same centre, radius, stroke and LOWER ENDPOINTS. Only the top
-            // portion is opened to make room for the battery number.
-            val originalStart = 151.5f
-            val originalEnd = 151.5f + 237f
+        drawSignalArc(c, rect, leftStart, leftSweep, if (airplaneMode) 0 else simLevels[1], active, inactive)
+        drawSignalArc(c, rect, rightStart, rightSweep, if (airplaneMode) 0 else simLevels[0], active, inactive)
 
-            // Top opening boundaries. These alter only the upper portion of the
-            // original track; the lower endpoints remain exactly at 151.5°/388.5°.
-            val isFullBattery = batteryPercent >= 100
-            val leftTopEnd = if (isFullBattery) 231f else 236f
-            val rightTopStart = if (isFullBattery) 309f else 304f
-            val leftSweep = leftTopEnd - originalStart
-            val rightSweep = originalEnd - rightTopStart
-
-            paint.color = inactive
-            c.drawArc(rect, originalStart, leftSweep, false, paint)
-            c.drawArc(rect, rightTopStart, rightSweep, false, paint)
-
-            // Preserve the original battery-progress direction and total 237°
-            // scale. The hidden top gap simply clips the part that would pass
-            // behind the number.
-            val progressEnd = originalStart +
-                237f * (batteryPercent.coerceIn(0,100) / 100f)
-            paint.color = batteryProgressColor
-
-            val leftProgressEnd = minOf(progressEnd, leftTopEnd)
-            if (leftProgressEnd > originalStart) {
-                c.drawArc(rect, originalStart, leftProgressEnd-originalStart, false, paint)
-            }
-            if (progressEnd > rightTopStart) {
-                val rightProgressEnd = minOf(progressEnd, originalEnd)
-                c.drawArc(rect, rightTopStart, rightProgressEnd-rightTopStart, false, paint)
-            }
-
-            // Keep the user-approved number scale from the previous preview.
-            paint.style = Paint.Style.FILL
-            paint.color = active
-            paint.textAlign = Paint.Align.CENTER
-            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            paint.textSize = 92f * s
-            val fmBattery = paint.fontMetrics
-            val batteryTextY = Y(60f) - (fmBattery.ascent + fmBattery.descent)/2f
-            c.drawText(batteryPercent.coerceIn(0,100).toString(), X(237f), batteryTextY, paint)
+        val batteryColor = when {
+            batteryPercent >= 100 -> Color.rgb(52, 199, 89)
+            charging -> Color.rgb(52, 199, 89)
+            powerSaveMode -> Color.rgb(255, 204, 0)
+            batteryPercent <= 20 -> Color.rgb(255, 59, 48)
+            else -> active
         }
 
-        // Locked cellular-dot geometry.
-        val dots = arrayOf(Pair(143f,342f), Pair(202f,372f), Pair(272f,372f), Pair(331f,342f))
-        val shownCellularLevel = if (airplaneMode) 0 else cellularLevel
+        // Battery lives above the camera ring and never occupies the camera hole.
         paint.style = Paint.Style.FILL
-        dots.forEachIndexed { index, (dx,dy) ->
-            paint.color = if (index < shownCellularLevel) active else inactive
-            c.drawCircle(X(dx), Y(dy), 18f*s, paint)
+        paint.color = batteryColor
+        paint.textAlign = Paint.Align.CENTER
+        paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        paint.textSize = 58f * s
+        val batteryText = if (batteryPercentageEnabled || batteryPercent <= 20) {
+            "${batteryPercent.coerceIn(0, 100)}%"
+        } else {
+            batteryPercent.coerceIn(0, 100).toString()
         }
+        val batteryFm = paint.fontMetrics
+        val batteryY = Y(36f) - (batteryFm.ascent + batteryFm.descent) / 2f
+        c.drawText(batteryText, cx, batteryY, paint)
 
-        if (wifiConnected) {
-            paint.style = Paint.Style.STROKE; paint.strokeWidth = 21f*s; paint.strokeCap = Paint.Cap.ROUND
-            Path().also { path ->
-                path.moveTo(X(171f),Y(194f)); path.cubicTo(X(205f),Y(160f),X(269f),Y(160f),X(304f),Y(194f))
-                paint.color = if (wifiLevel >= 2) active else inactive; c.drawPath(path,paint)
+        // Connectivity status sits below the camera opening.
+        when {
+            wifiConnected -> drawWifiCompact(c, s, active, inactive, ::X, ::Y)
+            airplaneMode -> drawAirplaneCompact(c, s, active, ::X, ::Y)
+            mobileDataConnected && cellularNetworkLabel.isNotEmpty() -> {
+                paint.style = Paint.Style.FILL
+                paint.color = active
+                paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                paint.textAlign = Paint.Align.CENTER
+                paint.textSize = 64f * s
+                val fm = paint.fontMetrics
+                val textY = Y(382f) - (fm.ascent + fm.descent) / 2f
+                c.drawText(cellularNetworkLabel, cx, textY, paint)
             }
-            Path().also { path ->
-                path.moveTo(X(199f),Y(224f)); path.cubicTo(X(220f),Y(203f),X(256f),Y(203f),X(277f),Y(224f))
-                paint.color = if (wifiLevel >= 1) active else inactive; c.drawPath(path,paint)
-            }
-            val terminal = Path().apply {
-                moveTo(X(237f),Y(238f)); cubicTo(X(223f),Y(238f),X(215f),Y(247f),X(215f),Y(255f))
-                cubicTo(X(215f),Y(262f),X(226f),Y(273f),X(233f),Y(279f)); cubicTo(X(236f),Y(282f),X(239f),Y(282f),X(242f),Y(279f))
-                cubicTo(X(249f),Y(273f),X(260f),Y(262f),X(260f),Y(255f)); cubicTo(X(260f),Y(247f),X(251f),Y(238f),X(237f),Y(238f)); close()
-            }
-            paint.style = Paint.Style.FILL; paint.color = active; c.drawPath(terminal,paint)
-        } else if (airplaneMode) {
-            drawAirplane(c, s, active, ::X) { value -> Y(value - 18f) }
-        } else if (mobileDataConnected && cellularNetworkLabel.isNotEmpty()) {
-            paint.style = Paint.Style.FILL; paint.color = active
-            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD); paint.textAlign = Paint.Align.CENTER; paint.textSize = 128f*s
-            val fm = paint.fontMetrics; val textY = Y(214f) - (fm.ascent + fm.descent)/2f
-            c.drawText(cellularNetworkLabel, X(237f), textY, paint)
         }
     }
 
-    private fun drawAirplane(c: Canvas, s: Float, color: Int, X: (Float)->Float, Y: (Float)->Float) {
-        // Solid, rounded nose-up silhouette based on the supplied reference.
-        val p = Path().apply {
-            moveTo(X(237f), Y(143f))
-            cubicTo(X(230f),Y(143f),X(226f),Y(151f),X(225f),Y(163f))
-            lineTo(X(221f),Y(205f))
-            lineTo(X(165f),Y(239f)); cubicTo(X(157f),Y(244f),X(154f),Y(251f),X(156f),Y(257f))
-            cubicTo(X(158f),Y(263f),X(166f),Y(264f),X(174f),Y(261f)); lineTo(X(221f),Y(244f))
-            lineTo(X(220f),Y(278f)); lineTo(X(196f),Y(297f)); cubicTo(X(191f),Y(301f),X(190f),Y(307f),X(193f),Y(311f))
-            cubicTo(X(196f),Y(315f),X(202f),Y(314f),X(207f),Y(312f)); lineTo(X(237f),Y(300f))
-            lineTo(X(267f),Y(312f)); cubicTo(X(272f),Y(314f),X(278f),Y(315f),X(281f),Y(311f))
-            cubicTo(X(284f),Y(307f),X(283f),Y(301f),X(278f),Y(297f)); lineTo(X(254f),Y(278f))
-            lineTo(X(253f),Y(244f)); lineTo(X(300f),Y(261f)); cubicTo(X(308f),Y(264f),X(316f),Y(263f),X(318f),Y(257f))
-            cubicTo(X(320f),Y(251f),X(317f),Y(244f),X(309f),Y(239f)); lineTo(X(253f),Y(205f)); lineTo(X(249f),Y(163f))
-            cubicTo(X(248f),Y(151f),X(244f),Y(143f),X(237f),Y(143f)); close()
+    private fun drawSignalArc(
+        c: Canvas,
+        rect: RectF,
+        start: Float,
+        sweep: Float,
+        level: Int,
+        active: Int,
+        inactive: Int
+    ) {
+        val normalized = level.coerceIn(0, 4) / 4f
+        paint.color = inactive
+        c.drawArc(rect, start, sweep, false, paint)
+        if (normalized > 0f) {
+            paint.color = active
+            c.drawArc(rect, start, sweep * normalized, false, paint)
         }
-        paint.style = Paint.Style.FILL; paint.color = color
+    }
+
+    private fun drawWifiCompact(
+        c: Canvas,
+        s: Float,
+        active: Int,
+        inactive: Int,
+        X: (Float) -> Float,
+        Y: (Float) -> Float
+    ) {
+        paint.style = Paint.Style.STROKE
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.strokeWidth = 13f * s
+
+        val outer = Path().apply {
+            moveTo(X(198f), Y(363f))
+            cubicTo(X(220f), Y(343f), X(254f), Y(343f), X(276f), Y(363f))
+        }
+        paint.color = if (wifiLevel >= 2) active else inactive
+        c.drawPath(outer, paint)
+
+        val inner = Path().apply {
+            moveTo(X(216f), Y(381f))
+            cubicTo(X(228f), Y(369f), X(246f), Y(369f), X(258f), Y(381f))
+        }
+        paint.color = if (wifiLevel >= 1) active else inactive
+        c.drawPath(inner, paint)
+
+        paint.style = Paint.Style.FILL
+        paint.color = active
+        c.drawCircle(X(237f), Y(397f), 7f * s, paint)
+    }
+
+    private fun drawAirplaneCompact(
+        c: Canvas,
+        s: Float,
+        color: Int,
+        X: (Float) -> Float,
+        Y: (Float) -> Float
+    ) {
+        val p = Path().apply {
+            moveTo(X(237f), Y(347f))
+            lineTo(X(244f), Y(374f))
+            lineTo(X(274f), Y(389f))
+            lineTo(X(244f), Y(387f))
+            lineTo(X(237f), Y(407f))
+            lineTo(X(230f), Y(387f))
+            lineTo(X(200f), Y(389f))
+            lineTo(X(230f), Y(374f))
+            close()
+        }
+        paint.style = Paint.Style.FILL
+        paint.color = color
         c.drawPath(p, paint)
     }
 }
