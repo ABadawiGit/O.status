@@ -78,6 +78,9 @@ class PositionSizeActivity : AppCompatActivity() {
         addSlider(card, "Thickness", 40, 180, prefs.getInt("ring_thickness_pct", 100)) {
             prefs.edit().putInt("ring_thickness_pct", it).apply(); applyNow()
         }
+        addSlider(card, "Battery size", 70, 220, prefs.getInt("battery_label_size_pct", 120)) {
+            prefs.edit().putInt("battery_label_size_pct", it).apply(); applyNow()
+        }
         addSlider(card, "4G / 5G size", 70, 220, prefs.getInt("network_label_size_pct", 135)) {
             prefs.edit().putInt("network_label_size_pct", it).apply(); applyNow()
         }
@@ -105,6 +108,7 @@ class PositionSizeActivity : AppCompatActivity() {
                 prefs.edit()
                     .putInt("duo_scale_v3_pct", 100)
                     .putInt("ring_thickness_pct", 100)
+                    .putInt("battery_label_size_pct", 120)
                     .putInt("network_label_size_pct", 135)
                     .putInt("duo_h_offset", 0)
                     .putInt("duo_v_offset_v2", 0)
