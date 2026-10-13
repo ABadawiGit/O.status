@@ -3,11 +3,11 @@ android {
  namespace="com.catch7ng.ostatus"
  compileSdk=35
  defaultConfig {
-  applicationId="com.catch7ng.ostatus"
+  applicationId="com.cameraring.preview"
   minSdk=29
   targetSdk=35
-  versionCode = 43
-  versionName = "3.0.0"
+  versionCode = 44
+  versionName = "3.1.0-preview"
  }
  compileOptions {
   sourceCompatibility=JavaVersion.VERSION_17
