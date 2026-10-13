@@ -159,17 +159,19 @@ class DuoIndicatorView(
         val cx = width / 2f
         val cy = height / 2f
         val active = resolvedActiveColor()
-        val inactive = withAlpha(active, 64)
-        val radius = side * 0.285f
-        val stroke = side * 0.052f * thicknessScale
+        val inactive = withAlpha(active, 58)
+        val radius = side * 0.292f
+        val stroke = side * 0.046f * thicknessScale
         val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
 
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = stroke
         paint.strokeCap = Paint.Cap.ROUND
 
-        drawSegmentedSignalArc(canvas, rect, 108f, 29f, 6f, if (airplaneMode) 0 else simLevels[1], active, inactive)
-        drawSegmentedSignalArc(canvas, rect, 288f, 29f, 6f, if (airplaneMode) 0 else simLevels[0], active, inactive)
+        // Compact side arcs: SIM 2 on the left, SIM 1 on the right.
+        // The shorter sweeps leave clear breathing room at top/bottom for status text.
+        drawSegmentedSignalArc(canvas, rect, 136f, 17f, 5f, if (airplaneMode) 0 else simLevels[1], active, inactive)
+        drawSegmentedSignalArc(canvas, rect, 316f, 17f, 5f, if (airplaneMode) 0 else simLevels[0], active, inactive)
 
         drawBattery(canvas, cx, cy, radius, side, active, statusGapScale)
         drawConnectivity(canvas, cx, cy, radius, side, active, inactive, statusGapScale, showNetworkLabel)
@@ -187,6 +189,9 @@ class DuoIndicatorView(
     }
 
     private fun drawBattery(canvas: Canvas, cx: Float, cy: Float, radius: Float, side: Float, active: Int, gapScale: Float) {
+        // The switch is literal: when percentage is off, the battery text disappears completely.
+        if (!batteryPercentageEnabled) return
+
         val batteryColor = when {
             batteryPercent >= 100 || charging -> Color.rgb(52, 199, 89)
             powerSaveMode -> Color.rgb(255, 204, 0)
@@ -197,10 +202,10 @@ class DuoIndicatorView(
         paint.color = batteryColor
         paint.textAlign = Paint.Align.CENTER
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        paint.textSize = side * 0.145f
-        val batteryText = if (batteryPercentageEnabled || batteryPercent <= 20) "${batteryPercent.coerceIn(0,100)}%" else batteryPercent.coerceIn(0,100).toString()
+        paint.textSize = side * 0.17f
+        val batteryText = "${batteryPercent.coerceIn(0,100)}%"
         val fm = paint.fontMetrics
-        val centerY = cy - radius - side * 0.11f * gapScale
+        val centerY = cy - radius - side * 0.13f * gapScale
         canvas.drawText(batteryText, cx, centerY - (fm.ascent + fm.descent) / 2f, paint)
     }
 
@@ -208,20 +213,35 @@ class DuoIndicatorView(
         canvas: Canvas, cx: Float, cy: Float, radius: Float, side: Float,
         active: Int, inactive: Int, gapScale: Float, showNetworkLabel: Boolean
     ) {
-        val centerY = cy + radius + side * 0.115f * gapScale
-        when {
-            wifiConnected -> drawWifi(canvas, cx, centerY, side, active, inactive)
-            airplaneMode -> drawAirplane(canvas, cx, centerY, side, active)
-            showNetworkLabel && mobileDataConnected && cellularNetworkLabel.isNotEmpty() -> {
-                paint.style = Paint.Style.FILL
-                paint.color = active
-                paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                paint.textAlign = Paint.Align.CENTER
-                paint.textSize = side * 0.135f
-                val fm = paint.fontMetrics
-                canvas.drawText(cellularNetworkLabel, cx, centerY - (fm.ascent + fm.descent) / 2f, paint)
-            }
+        val baseY = cy + radius + side * 0.13f * gapScale
+
+        if (airplaneMode) {
+            drawAirplane(canvas, cx, baseY, side, active)
+            return
         }
+
+        val hasNetworkLabel = showNetworkLabel && cellularNetworkLabel.isNotEmpty()
+
+        // Wi-Fi and cellular generation are independent indicators now.
+        // When both exist, place them side-by-side instead of letting Wi-Fi hide 4G/5G.
+        when {
+            wifiConnected && hasNetworkLabel -> {
+                drawWifi(canvas, cx - side * 0.10f, baseY, side, active, inactive)
+                drawNetworkLabel(canvas, cellularNetworkLabel, cx + side * 0.115f, baseY, side, active)
+            }
+            wifiConnected -> drawWifi(canvas, cx, baseY, side, active, inactive)
+            hasNetworkLabel -> drawNetworkLabel(canvas, cellularNetworkLabel, cx, baseY, side, active)
+        }
+    }
+
+    private fun drawNetworkLabel(canvas: Canvas, label: String, cx: Float, cy: Float, side: Float, color: Int) {
+        paint.style = Paint.Style.FILL
+        paint.color = color
+        paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        paint.textAlign = Paint.Align.CENTER
+        paint.textSize = side * 0.175f
+        val fm = paint.fontMetrics
+        canvas.drawText(label, cx, cy - (fm.ascent + fm.descent) / 2f, paint)
     }
 
     private fun drawWifi(canvas: Canvas, cx: Float, cy: Float, side: Float, active: Int, inactive: Int) {
