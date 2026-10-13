@@ -31,7 +31,6 @@ class DuoIndicatorView(
     private var powerSaveMode = false
     private var wifiConnected = false
     private var wifiLevel = 0
-    private var mobileDataConnected = false
     private var airplaneMode = false
     private val simLevels = intArrayOf(0, 0)
     private val animatedSimLevels = floatArrayOf(0f, 0f)
@@ -104,8 +103,7 @@ class DuoIndicatorView(
     private fun refreshWifi() {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val caps = cm.getNetworkCapabilities(cm.activeNetwork)
-        wifiConnected = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-        mobileDataConnected = caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true &&
+        wifiConnected = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
             caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
 
         if (wifiConnected) {
@@ -186,16 +184,15 @@ class DuoIndicatorView(
         val cx = width / 2f
         val cy = height / 2f
         val active = resolvedActiveColor()
-        val inactive = withAlpha(active, 58)
+        val inactive = withAlpha(active, 70)
         val radius = side * 0.285f
-        val stroke = side * 0.052f * thicknessScale
+        val stroke = (side * 0.052f * thicknessScale).coerceAtLeast(side * 0.030f)
         val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
 
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = stroke
         paint.strokeCap = Paint.Cap.ROUND
 
-        // Keep the original arc presence, but animate each segment's fill softly when signal changes.
         drawSegmentedSignalArc(canvas, rect, 108f, 29f, 6f, if (airplaneMode) 0f else animatedSimLevels[1], active, inactive)
         drawSegmentedSignalArc(canvas, rect, 288f, 29f, 6f, if (airplaneMode) 0f else animatedSimLevels[0], active, inactive)
 
@@ -218,18 +215,17 @@ class DuoIndicatorView(
 
     private fun drawBattery(canvas: Canvas, cx: Float, cy: Float, radius: Float, side: Float, active: Int, gapScale: Float) {
         if (!batteryPercentageEnabled) return
+        val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val sizeScale = prefs.getInt("battery_label_size_pct", 120).coerceIn(70, 220) / 100f
+        val useCustom = prefs.getBoolean("battery_custom_color_enabled", false)
+        val customBattery = prefs.getInt("battery_custom_color", active)
+        val batteryColor = if (useCustom) customBattery else active
 
-        val batteryColor = when {
-            batteryPercent >= 100 || charging -> Color.rgb(52, 199, 89)
-            powerSaveMode -> Color.rgb(255, 204, 0)
-            batteryPercent <= 20 -> Color.rgb(255, 59, 48)
-            else -> active
-        }
         paint.style = Paint.Style.FILL
         paint.color = batteryColor
         paint.textAlign = Paint.Align.CENTER
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        paint.textSize = side * 0.17f
+        paint.textSize = side * 0.14f * sizeScale
         val batteryText = "${batteryPercent.coerceIn(0,100)}%"
         val fm = paint.fontMetrics
         val centerY = cy - radius - side * 0.13f * gapScale
@@ -247,15 +243,14 @@ class DuoIndicatorView(
             return
         }
 
-        val hasNetworkLabel = showNetworkLabel && cellularNetworkLabel.isNotEmpty()
+        // Wi-Fi is the active transport indicator. Do not show 4G/5G while Wi-Fi is connected.
+        if (wifiConnected) {
+            drawWifi(canvas, cx, baseY, side, active, inactive)
+            return
+        }
 
-        when {
-            wifiConnected && hasNetworkLabel -> {
-                drawWifi(canvas, cx - side * 0.10f, baseY, side, active, inactive)
-                drawNetworkLabel(canvas, cellularNetworkLabel, cx + side * 0.115f, baseY, side, active)
-            }
-            wifiConnected -> drawWifi(canvas, cx, baseY, side, active, inactive)
-            hasNetworkLabel -> drawNetworkLabel(canvas, cellularNetworkLabel, cx, baseY, side, active)
+        if (showNetworkLabel && cellularNetworkLabel.isNotEmpty()) {
+            drawNetworkLabel(canvas, cellularNetworkLabel, cx, baseY, side, active)
         }
     }
 
@@ -274,16 +269,16 @@ class DuoIndicatorView(
     private fun drawWifi(canvas: Canvas, cx: Float, cy: Float, side: Float, active: Int, inactive: Int) {
         paint.style = Paint.Style.STROKE
         paint.strokeCap = Paint.Cap.ROUND
-        paint.strokeWidth = side * 0.026f
-        val outerRadius = side * 0.082f
-        val midRadius = side * 0.055f
+        paint.strokeWidth = (side * 0.030f).coerceAtLeast(2.2f)
+        val outerRadius = side * 0.090f
+        val midRadius = side * 0.060f
         paint.color = if (wifiLevel >= 2) active else inactive
         canvas.drawArc(RectF(cx - outerRadius, cy - outerRadius, cx + outerRadius, cy + outerRadius), 215f, 110f, false, paint)
         paint.color = if (wifiLevel >= 1) active else inactive
         canvas.drawArc(RectF(cx - midRadius, cy - midRadius, cx + midRadius, cy + midRadius), 220f, 100f, false, paint)
         paint.style = Paint.Style.FILL
         paint.color = active
-        canvas.drawCircle(cx, cy + side * 0.038f, side * 0.014f, paint)
+        canvas.drawCircle(cx, cy + side * 0.040f, side * 0.016f, paint)
     }
 
     private fun drawAirplane(canvas: Canvas, cx: Float, cy: Float, side: Float, color: Int) {
