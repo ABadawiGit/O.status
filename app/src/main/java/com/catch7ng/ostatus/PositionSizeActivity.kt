@@ -57,7 +57,7 @@ class PositionSizeActivity : AppCompatActivity() {
             setTextColor(primary)
         })
         content.addView(TextView(this).apply {
-            text = "Tune the ring to sit exactly around your camera cutout."
+            text = "Tune the ring and status labels independently around your camera cutout."
             textSize = 14f
             setTextColor(secondary)
             setPadding(0, dp(4), 0, dp(18))
@@ -75,8 +75,11 @@ class PositionSizeActivity : AppCompatActivity() {
         addSlider(card, "Ring size", 50, 180, prefs.getInt("duo_scale_v3_pct", 100)) {
             prefs.edit().putInt("duo_scale_v3_pct", it).apply(); applyNow()
         }
-        addSlider(card, "Thickness", 40, 160, prefs.getInt("ring_thickness_pct", 100)) {
+        addSlider(card, "Thickness", 40, 180, prefs.getInt("ring_thickness_pct", 100)) {
             prefs.edit().putInt("ring_thickness_pct", it).apply(); applyNow()
+        }
+        addSlider(card, "4G / 5G size", 70, 220, prefs.getInt("network_label_size_pct", 135)) {
+            prefs.edit().putInt("network_label_size_pct", it).apply(); applyNow()
         }
         addSlider(card, "Horizontal", -60, 60, prefs.getInt("duo_h_offset", 0)) {
             prefs.edit().putInt("duo_h_offset", it).apply(); applyNow()
@@ -102,6 +105,7 @@ class PositionSizeActivity : AppCompatActivity() {
                 prefs.edit()
                     .putInt("duo_scale_v3_pct", 100)
                     .putInt("ring_thickness_pct", 100)
+                    .putInt("network_label_size_pct", 135)
                     .putInt("duo_h_offset", 0)
                     .putInt("duo_v_offset_v2", 0)
                     .putInt("status_gap_pct", 100)
