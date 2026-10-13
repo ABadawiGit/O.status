@@ -3,7 +3,6 @@ package com.catch7ng.ostatus
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.content.res.Configuration
 import android.graphics.*
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -43,15 +42,8 @@ class DuoIndicatorView(
     private var cellularNetworkLabel = ""
     private var trackedDataSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
     private var networkDisplayTracker: NetworkDisplayTracker? = null
-    private var shizukuAutoBlack: Boolean? = null
     private var customColor: Int = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
         .getInt("custom_color", Color.WHITE)
-
-    fun setShizukuAutoBlack(value: Boolean?) {
-        if (shizukuAutoBlack == value) return
-        shizukuAutoBlack = value
-        invalidate()
-    }
 
     fun setBatteryPercentageEnabled(value: Boolean) {
         if (batteryPercentageEnabled == value) return
@@ -62,7 +54,6 @@ class DuoIndicatorView(
     fun setColorMode(value: String) {
         if (colorMode == value) return
         colorMode = value
-        shizukuAutoBlack = null
         customColor = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
             .getInt("custom_color", Color.WHITE)
         invalidate()
@@ -93,17 +84,10 @@ class DuoIndicatorView(
         trackedDataSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
     }
 
-    private fun isBlackIndicator(): Boolean = when (colorMode) {
-        "black" -> true
-        "white" -> false
-        else -> shizukuAutoBlack ?: ((resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) != Configuration.UI_MODE_NIGHT_YES)
-    }
-
     private fun resolvedActiveColor(): Int = when (colorMode) {
         "black" -> Color.BLACK
-        "white" -> Color.WHITE
         "custom" -> customColor
-        else -> if (isBlackIndicator()) Color.BLACK else Color.WHITE
+        else -> Color.WHITE
     }
 
     private fun withAlpha(color: Int, alpha: Int): Int = Color.argb(
@@ -239,7 +223,6 @@ class DuoIndicatorView(
             else -> active
         }
 
-        // Battery lives above the camera ring and never occupies the camera hole.
         paint.style = Paint.Style.FILL
         paint.color = batteryColor
         paint.textAlign = Paint.Align.CENTER
@@ -254,7 +237,6 @@ class DuoIndicatorView(
         val batteryY = Y(36f) - (batteryFm.ascent + batteryFm.descent) / 2f
         c.drawText(batteryText, cx, batteryY, paint)
 
-        // Connectivity status sits below the camera opening.
         when {
             wifiConnected -> drawWifiCompact(c, s, active, inactive, ::X, ::Y)
             airplaneMode -> drawAirplaneCompact(c, s, active, ::X, ::Y)
