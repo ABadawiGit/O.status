@@ -11,7 +11,6 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
@@ -32,6 +31,7 @@ class MainActivity : AppCompatActivity() {
 
     private var preview: RingPreviewView? = null
     private var colorValue: TextView? = null
+    private var batteryColorValue: TextView? = null
     private var overlayValue: TextView? = null
     private var phoneValue: TextView? = null
 
@@ -114,6 +114,11 @@ class MainActivity : AppCompatActivity() {
         colorValue = valueChip(colorName())
         appearance.addView(actionRowWithView("Ring colour", colorValue!!) { showColourMenu() })
         appearance.addView(divider())
+
+        batteryColorValue = valueChip(batteryColorName())
+        appearance.addView(actionRowWithView("Battery colour", batteryColorValue!!) { showBatteryColourMenu() })
+        appearance.addView(divider())
+
         appearance.addView(toggleRow("Show battery percentage", prefs.getBoolean("battery_percentage", true)) { enabled ->
             prefs.edit().putBoolean("battery_percentage", enabled).apply()
             BootPrefs.setBatteryPercentage(this, enabled)
@@ -171,6 +176,34 @@ class MainActivity : AppCompatActivity() {
                             colorValue?.text = String.format("#%06X", 0xFFFFFF and color)
                             refreshOverlay(); preview?.invalidate()
                         }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showBatteryColourMenu() {
+        val customEnabled = prefs.getBoolean("battery_custom_color_enabled", false)
+        val checked = if (customEnabled) 1 else 0
+        val labels = arrayOf("Match ring colour", "Custom…")
+        AlertDialog.Builder(this)
+            .setTitle("Battery colour")
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                if (which == 0) {
+                    prefs.edit().putBoolean("battery_custom_color_enabled", false).apply()
+                    batteryColorValue?.text = "Ring"
+                    dialog.dismiss()
+                    refreshOverlay(); preview?.invalidate()
+                } else {
+                    dialog.dismiss()
+                    IndicatorColorPickerDialog.show(this, prefs.getInt("battery_custom_color", Color.WHITE)) { color ->
+                        prefs.edit()
+                            .putBoolean("battery_custom_color_enabled", true)
+                            .putInt("battery_custom_color", color)
+                            .apply()
+                        batteryColorValue?.text = String.format("#%06X", 0xFFFFFF and color)
+                        refreshOverlay(); preview?.invalidate()
                     }
                 }
             }
@@ -293,6 +326,10 @@ class MainActivity : AppCompatActivity() {
         else -> "White"
     }
 
+    private fun batteryColorName(): String = if (prefs.getBoolean("battery_custom_color_enabled", false)) {
+        String.format("#%06X", 0xFFFFFF and prefs.getInt("battery_custom_color", Color.WHITE))
+    } else "Ring"
+
     private inner class RingPreviewView : View(this) {
         private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
         override fun onDraw(c: Canvas) {
@@ -305,7 +342,7 @@ class MainActivity : AppCompatActivity() {
                 "custom" -> prefs.getInt("custom_color", accent)
                 else -> Color.WHITE
             }
-            val inactive = Color.argb(55, Color.red(color), Color.green(color), Color.blue(color))
+            val inactive = Color.argb(70, Color.red(color), Color.green(color), Color.blue(color))
             p.style = Paint.Style.FILL
             p.color = Color.BLACK
             c.drawCircle(cx, cy, r * .45f, p)
@@ -323,11 +360,16 @@ class MainActivity : AppCompatActivity() {
             p.style = Paint.Style.FILL
             p.typeface = Typeface.create("sans-serif", Typeface.BOLD)
             p.textAlign = Paint.Align.CENTER
-            p.textSize = dp(18).toFloat()
-            p.color = color
+            val batteryScale = prefs.getInt("battery_label_size_pct", 120).coerceIn(70,220) / 100f
+            p.textSize = dp(15).toFloat() * batteryScale
+            p.color = if (prefs.getBoolean("battery_custom_color_enabled", false)) {
+                prefs.getInt("battery_custom_color", color)
+            } else color
             c.drawText("50%", cx, cy-r-dp(12), p)
             if (prefs.getBoolean("show_network_label", true)) {
-                p.textSize = dp(14).toFloat()
+                val networkScale = prefs.getInt("network_label_size_pct", 135).coerceIn(70,220) / 100f
+                p.textSize = dp(12).toFloat() * networkScale
+                p.color = color
                 c.drawText("5G", cx, cy+r+dp(24), p)
             }
         }
