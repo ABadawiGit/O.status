@@ -10,14 +10,15 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.provider.Settings
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import androidx.core.content.ContextCompat
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
 
 class DuoIndicatorView(
     ctx: Context,
@@ -28,7 +29,6 @@ class DuoIndicatorView(
     var batteryPercent = 0
     var charging = false
 
-    private var powerSaveMode = false
     private var wifiConnected = false
     private var wifiLevel = 0
     private var airplaneMode = false
@@ -93,8 +93,6 @@ class DuoIndicatorView(
     )
 
     private fun refreshSystemStates() {
-        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        powerSaveMode = pm.isPowerSaveMode
         airplaneMode = try {
             Settings.Global.getInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1
         } catch (_: Exception) { false }
@@ -178,58 +176,79 @@ class DuoIndicatorView(
 
         val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
         val thicknessScale = prefs.getInt("ring_thickness_pct", 100).coerceIn(40, 180) / 100f
-        val statusGapScale = prefs.getInt("status_gap_pct", 100).coerceIn(60, 180) / 100f
+        val statusGapScale = prefs.getInt("status_gap_pct", 100).coerceIn(60, 220) / 100f
         val showNetworkLabel = prefs.getBoolean("show_network_label", true)
 
         val cx = width / 2f
         val cy = height / 2f
         val active = resolvedActiveColor()
-        val inactive = withAlpha(active, 70)
-        val radius = side * 0.285f
-        val stroke = (side * 0.052f * thicknessScale).coerceAtLeast(side * 0.030f)
-        val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
+        val inactive = withAlpha(active, 72)
+        val radius = side * 0.31f
+        val haloStroke = (side * 0.018f * thicknessScale).coerceAtLeast(side * 0.010f)
 
+        // Subtle full halo gives the punch-hole a Dynamic-Island-like visual anchor.
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = stroke
-        paint.strokeCap = Paint.Cap.ROUND
+        paint.strokeWidth = haloStroke
+        paint.color = withAlpha(active, 30)
+        canvas.drawCircle(cx, cy, radius, paint)
 
-        drawSegmentedSignalArc(canvas, rect, 108f, 29f, 6f, if (airplaneMode) 0f else animatedSimLevels[1], active, inactive)
-        drawSegmentedSignalArc(canvas, rect, 288f, 29f, 6f, if (airplaneMode) 0f else animatedSimLevels[0], active, inactive)
+        drawSignalDotsOnArc(canvas, cx, cy, radius, 140f, 18f, if (airplaneMode) 0f else animatedSimLevels[1], active, inactive, side, thicknessScale)
+        drawSignalDotsOnArc(canvas, cx, cy, radius, 320f, 18f, if (airplaneMode) 0f else animatedSimLevels[0], active, inactive, side, thicknessScale)
 
-        drawBattery(canvas, cx, cy, radius, side, active, statusGapScale)
+        drawBatteryDots(canvas, cx, cy, radius, side, active, inactive, statusGapScale)
         drawConnectivity(canvas, cx, cy, radius, side, active, inactive, statusGapScale, showNetworkLabel)
     }
 
-    private fun drawSegmentedSignalArc(
-        canvas: Canvas, rect: RectF, start: Float, segmentSweep: Float, segmentGap: Float,
-        level: Float, active: Int, inactive: Int
+    private fun drawSignalDotsOnArc(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        startDeg: Float,
+        stepDeg: Float,
+        level: Float,
+        active: Int,
+        inactive: Int,
+        side: Float,
+        thicknessScale: Float
     ) {
+        val dotRadius = (side * 0.026f * thicknessScale).coerceAtLeast(side * 0.018f)
+        paint.style = Paint.Style.FILL
         repeat(4) { index ->
+            val angle = Math.toRadians((startDeg + index * stepDeg).toDouble())
+            val x = cx + cos(angle).toFloat() * radius
+            val y = cy + sin(angle).toFloat() * radius
             val fill = (level - index).coerceIn(0f, 1f)
-            val inactiveAlpha = Color.alpha(inactive)
-            val alpha = (inactiveAlpha + (255 - inactiveAlpha) * fill).toInt()
+            val baseAlpha = Color.alpha(inactive)
+            val alpha = (baseAlpha + (255 - baseAlpha) * fill).toInt()
             paint.color = withAlpha(active, alpha)
-            canvas.drawArc(rect, start + index * (segmentSweep + segmentGap), segmentSweep, false, paint)
+            canvas.drawCircle(x, y, dotRadius, paint)
         }
     }
 
-    private fun drawBattery(canvas: Canvas, cx: Float, cy: Float, radius: Float, side: Float, active: Int, gapScale: Float) {
+    private fun drawBatteryDots(canvas: Canvas, cx: Float, cy: Float, radius: Float, side: Float, active: Int, inactive: Int, gapScale: Float) {
         if (!batteryPercentageEnabled) return
         val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
         val sizeScale = prefs.getInt("battery_label_size_pct", 120).coerceIn(70, 220) / 100f
         val useCustom = prefs.getBoolean("battery_custom_color_enabled", false)
-        val customBattery = prefs.getInt("battery_custom_color", active)
-        val batteryColor = if (useCustom) customBattery else active
-
+        val batteryColor = if (useCustom) prefs.getInt("battery_custom_color", active) else active
+        val batteryInactive = withAlpha(batteryColor, 72)
+        val lit = when {
+            batteryPercent >= 75 -> 4
+            batteryPercent >= 50 -> 3
+            batteryPercent >= 25 -> 2
+            batteryPercent > 0 -> 1
+            else -> 0
+        }
+        val dotR = side * 0.018f * sizeScale
+        val gap = dotR * 2.8f
+        val y = cy - radius - side * 0.13f * gapScale
+        val startX = cx - gap * 1.5f
         paint.style = Paint.Style.FILL
-        paint.color = batteryColor
-        paint.textAlign = Paint.Align.CENTER
-        paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        paint.textSize = side * 0.14f * sizeScale
-        val batteryText = "${batteryPercent.coerceIn(0,100)}%"
-        val fm = paint.fontMetrics
-        val centerY = cy - radius - side * 0.13f * gapScale
-        canvas.drawText(batteryText, cx, centerY - (fm.ascent + fm.descent) / 2f, paint)
+        repeat(4) { i ->
+            paint.color = if (i < lit) batteryColor else batteryInactive
+            canvas.drawCircle(startX + i * gap, y, dotR, paint)
+        }
     }
 
     private fun drawConnectivity(
@@ -243,9 +262,8 @@ class DuoIndicatorView(
             return
         }
 
-        // Wi-Fi is the active transport indicator. Do not show 4G/5G while Wi-Fi is connected.
         if (wifiConnected) {
-            drawWifi(canvas, cx, baseY, side, active, inactive)
+            drawWifiDots(canvas, cx, baseY, side, active, inactive)
             return
         }
 
@@ -266,19 +284,18 @@ class DuoIndicatorView(
         canvas.drawText(label, cx, cy - (fm.ascent + fm.descent) / 2f, paint)
     }
 
-    private fun drawWifi(canvas: Canvas, cx: Float, cy: Float, side: Float, active: Int, inactive: Int) {
-        paint.style = Paint.Style.STROKE
-        paint.strokeCap = Paint.Cap.ROUND
-        paint.strokeWidth = (side * 0.030f).coerceAtLeast(2.2f)
-        val outerRadius = side * 0.090f
-        val midRadius = side * 0.060f
-        paint.color = if (wifiLevel >= 2) active else inactive
-        canvas.drawArc(RectF(cx - outerRadius, cy - outerRadius, cx + outerRadius, cy + outerRadius), 215f, 110f, false, paint)
-        paint.color = if (wifiLevel >= 1) active else inactive
-        canvas.drawArc(RectF(cx - midRadius, cy - midRadius, cx + midRadius, cy + midRadius), 220f, 100f, false, paint)
+    private fun drawWifiDots(canvas: Canvas, cx: Float, cy: Float, side: Float, active: Int, inactive: Int) {
+        val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val scale = prefs.getInt("network_label_size_pct", 135).coerceIn(70, 220) / 100f
+        val dotR = side * 0.017f * scale
+        val gap = dotR * 2.8f
+        val startX = cx - gap * 1.5f
+        val lit = (wifiLevel + 1).coerceIn(1, 4)
         paint.style = Paint.Style.FILL
-        paint.color = active
-        canvas.drawCircle(cx, cy + side * 0.040f, side * 0.016f, paint)
+        repeat(4) { i ->
+            paint.color = if (i < lit) active else inactive
+            canvas.drawCircle(startX + i * gap, cy, dotR, paint)
+        }
     }
 
     private fun drawAirplane(canvas: Canvas, cx: Float, cy: Float, side: Float, color: Int) {
