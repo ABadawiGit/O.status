@@ -44,6 +44,8 @@ class DuoIndicatorView(
     private var trackedDataSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
     private var networkDisplayTracker: NetworkDisplayTracker? = null
     private var shizukuAutoBlack: Boolean? = null
+    private var customColor: Int = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        .getInt("custom_color", Color.WHITE)
 
     fun setShizukuAutoBlack(value: Boolean?) {
         if (shizukuAutoBlack == value) return
@@ -61,6 +63,8 @@ class DuoIndicatorView(
         if (colorMode == value) return
         colorMode = value
         shizukuAutoBlack = null
+        customColor = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+            .getInt("custom_color", Color.WHITE)
         invalidate()
     }
 
@@ -94,6 +98,20 @@ class DuoIndicatorView(
         "white" -> false
         else -> shizukuAutoBlack ?: ((resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) != Configuration.UI_MODE_NIGHT_YES)
     }
+
+    private fun resolvedActiveColor(): Int = when (colorMode) {
+        "black" -> Color.BLACK
+        "white" -> Color.WHITE
+        "custom" -> customColor
+        else -> if (isBlackIndicator()) Color.BLACK else Color.WHITE
+    }
+
+    private fun withAlpha(color: Int, alpha: Int): Int = Color.argb(
+        alpha.coerceIn(0, 255),
+        Color.red(color),
+        Color.green(color),
+        Color.blue(color)
+    )
 
     private fun refreshSystemStates() {
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -186,9 +204,8 @@ class DuoIndicatorView(
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
 
-        val black = isBlackIndicator()
-        val active = if (black) Color.BLACK else Color.WHITE
-        val inactive = if (black) 0x38000000 else 0x55FFFFFF
+        val active = resolvedActiveColor()
+        val inactive = withAlpha(active, if (colorMode == "custom") 74 else 72)
 
         val s = min(width, height) / 436f
         fun X(v: Float) = width / 2f + (v - 237f) * s
